@@ -178,6 +178,25 @@ public:
     this->tick();
   }
 
+#ifdef VM_ENABLE
+  void set_satp(uint64_t satp) {
+    satp_snapshot_ = satp;
+    
+    // SB-ATTN: Hardware integration - Update these constants when DCRs are defined
+    // You also may want to move this to the runtime or vm file
+    const uint32_t DCR_SATP_LOW  = -1; // REPLACE WITH: VX_DCR_SATP_LOW
+    const uint32_t DCR_SATP_HIGH = -1; // REPLACE WITH: VX_DCR_SATP_HIGH
+    
+    if (DCR_SATP_LOW != (uint32_t)-1) {
+        this->dcr_write(DCR_SATP_LOW, (uint32_t)(satp & 0xffffffff));
+        #if XLEN == 64
+        if (DCR_SATP_HIGH != (uint32_t)-1)
+            this->dcr_write(DCR_SATP_HIGH, (uint32_t)(satp >> 32));
+        #endif
+    }
+  }
+#endif
+
 private:
 
   void reset() {
@@ -403,16 +422,28 @@ private:
 #ifdef VCD_OUTPUT
   VerilatedVcdC *tfp_;
 #endif
+
+#ifdef VM_ENABLE
+  uint64_t satp_snapshot_;
+#endif
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 
 Processor::Processor()
   : impl_(new Impl())
-{}
+{
+#ifdef VM_ENABLE
+  satp_ = NULL;
+#endif
+}
 
 Processor::~Processor() {
   delete impl_;
+#ifdef VM_ENABLE
+  if (satp_ != NULL)
+    delete satp_;
+#endif
 }
 
 void Processor::attach_ram(RAM* mem) {
@@ -426,3 +457,26 @@ void Processor::run() {
 void Processor::dcr_write(uint32_t addr, uint32_t value) {
   return impl_->dcr_write(addr, value);
 }
+
+#ifdef VM_ENABLE
+int16_t Processor::set_satp_by_addr(uint64_t base_addr) {
+  uint16_t asid = 0;
+  satp_ = new SATP_t (base_addr,asid);
+  if (satp_ == NULL)
+    return 1;
+  uint64_t satp = satp_->get_satp();
+  impl_->set_satp(satp);
+  return 0;
+}
+bool Processor::is_satp_unset() {
+  return (satp_== NULL);
+}
+uint8_t Processor::get_satp_mode() {
+  assert (satp_!=NULL);
+  return satp_->get_mode();
+}
+uint64_t Processor::get_base_ppn() {
+  assert (satp_!=NULL);
+  return satp_->get_base_ppn();
+}
+#endif

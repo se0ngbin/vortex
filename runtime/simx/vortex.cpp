@@ -326,13 +326,13 @@ public:
 
 private:
   Arch arch_;
-  RAM ram_;
-  Processor processor_;
-  MemoryAllocator global_mem_;
-  DeviceConfig dcrs_;
-  std::future<void> future_;
+  RAM                 ram_;
+  Processor           processor_;
+  MemoryAllocator     global_mem_;
+  DeviceConfig        dcrs_;
+  std::future<void>   future_;
+  bool                pt_reserved_;
   std::unordered_map<uint32_t, std::array<uint64_t, 32>> mpm_cache_;
-  bool pt_reserved_;
 #ifdef VM_ENABLE
   /*
   std::unordered_map<uint64_t, uint64_t> addr_mapping; // HW: key: ppn; value: vpn

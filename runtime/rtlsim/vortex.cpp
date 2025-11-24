@@ -15,7 +15,7 @@
 
 #include <mem.h>
 #include <util.h>
-#include <processor.h>
+#include <processor.h> // SB-ATTN: rtlsim/processor.h?
 
 #include <stdint.h>
 #include <stdio.h>
@@ -25,6 +25,11 @@
 #include <future>
 #include <list>
 #include <chrono>
+
+#ifdef VM_ENABLE
+#include <vm.h>
+#include <unordered_map>
+#endif
 
 using namespace vortex;
 
@@ -38,9 +43,18 @@ public:
                   CACHE_BLOCK_SIZE)
   {
     processor_.attach_ram(&ram_);
+#ifdef VM_ENABLE
+    std::cout << "*** VM ENABLED!! ***" << std::endl;
+    vm_mgr_ = std::make_unique<VMManager>(&processor_, &ram_);
+    CHECK_ERR(init_VM(), );
+#endif
   }
 
   ~vx_device() {
+#ifdef VM_ENABLE
+    if (pt_reserved_)
+      global_mem_.release(PAGE_TABLE_BASE_ADDR);
+#endif
     if (future_.valid()) {
       future_.wait();
     }
@@ -75,7 +89,7 @@ public:
       _value = (1 << LMEM_LOG_SIZE);
       break;
     case VX_CAPS_ISA_FLAGS:
-      _value = ((uint64_t(MISA_EXT))<<32) | ((log2floor(XLEN)-4) << 30) | MISA_STD;
+      _value = ((uint64_t(MISA_EXT)) << 32) | ((log2floor(XLEN) - 4) << 30) | MISA_STD;
       break;
     case VX_CAPS_NUM_MEM_BANKS:
       _value = PLATFORM_MEMORY_NUM_BANKS;
@@ -92,24 +106,42 @@ public:
     return 0;
   }
 
-  int mem_alloc(uint64_t size, int flags, uint64_t* dev_addr) {
+  int mem_alloc(uint64_t size, int flags, uint64_t *dev_addr) {
+#ifdef VM_ENABLE
+    uint64_t asize = aligned_size(size, MEM_PAGE_SIZE);
+#else
+    uint64_t asize = size;
+#endif
     uint64_t addr;
-    CHECK_ERR(global_mem_.allocate(size, &addr), {
+
+    DBGPRINT("[RT:mem_alloc] size: 0x%lx, asize, 0x%lx,flag : 0x%d\n", size, asize, flags);
+    // HW: when vm is supported this global_mem_ should be virtual memory allocator
+    CHECK_ERR(global_mem_.allocate(asize, &addr), {
       return err;
     });
-    CHECK_ERR(this->mem_access(addr, size, flags), {
+    CHECK_ERR(this->mem_access(addr, asize, flags), {
       global_mem_.release(addr);
       return err;
     });
     *dev_addr = addr;
+#ifdef VM_ENABLE
+    // VM address translation
+    vm_mgr_->phy_to_virt_map(asize, dev_addr, flags);
+#endif
     return 0;
   }
 
   int mem_reserve(uint64_t dev_addr, uint64_t size, int flags) {
-    CHECK_ERR(global_mem_.reserve(dev_addr, size), {
+#ifdef VM_ENABLE
+    uint64_t asize = aligned_size(size, MEM_PAGE_SIZE);
+#else
+    uint64_t asize = size;
+#endif
+    CHECK_ERR(global_mem_.reserve(dev_addr, asize), {
       return err;
     });
-    CHECK_ERR(this->mem_access(dev_addr, size, flags), {
+    DBGPRINT("[RT:mem_reserve] addr: 0x%lx, asize:0x%lx, size: 0x%lx\n", dev_addr, asize, size);
+    CHECK_ERR(this->mem_access(dev_addr, asize, flags), {
       global_mem_.release(dev_addr);
       return err;
     });
@@ -117,7 +149,12 @@ public:
   }
 
   int mem_free(uint64_t dev_addr) {
+#ifdef VM_ENABLE
+    uint64_t paddr = vm_mgr_->page_table_walk(dev_addr); // software translation path
+    return global_mem_.release(paddr);
+#else
     return global_mem_.release(dev_addr);
+#endif
   }
 
   int mem_access(uint64_t dev_addr, uint64_t size, int flags) {
@@ -125,16 +162,16 @@ public:
     if (dev_addr + asize > GLOBAL_MEM_SIZE)
       return -1;
 
-    if (flags | VX_MEM_WRITE) {
+    // fixed from | to &.. not sure if this is correct SB-ATTN
+    if (flags & VX_MEM_WRITE) {
       flags |= VX_MEM_READ; // ensure caches can handle fill requests
     }
 
     ram_.set_acl(dev_addr, size, flags);
-
     return 0;
   }
 
-  int mem_info(uint64_t* mem_free, uint64_t* mem_used) const {
+  int mem_info(uint64_t *mem_free, uint64_t *mem_used) const {
     if (mem_free)
       *mem_free = global_mem_.free();
     if (mem_used)
@@ -142,13 +179,18 @@ public:
     return 0;
   }
 
-  int upload(uint64_t dest_addr, const void* src, uint64_t size) {
+  int upload(uint64_t dest_addr, const void *src, uint64_t size) {
     uint64_t asize = aligned_size(size, CACHE_BLOCK_SIZE);
     if (dest_addr + asize > GLOBAL_MEM_SIZE)
       return -1;
+#ifdef VM_ENABLE
+    uint64_t pAddr = vm_mgr_->page_table_walk(dest_addr);
+    DBGPRINT("  [RT:upload] Upload data to vAddr = 0x%lx (pAddr=0x%lx)\n", dest_addr, pAddr);
+    dest_addr = pAddr; // Overwirte
+#endif
 
     ram_.enable_acl(false);
-    ram_.write((const uint8_t*)src, dest_addr, size);
+    ram_.write((const uint8_t *)src, dest_addr, size);
     ram_.enable_acl(true);
 
     /*printf("VXDRV: upload %ld bytes from 0x%lx:", size, uintptr_t((uint8_t*)src));
@@ -163,13 +205,18 @@ public:
     return 0;
   }
 
-  int download(void* dest, uint64_t src_addr, uint64_t size) {
+  int download(void *dest, uint64_t src_addr, uint64_t size) {
     uint64_t asize = aligned_size(size, CACHE_BLOCK_SIZE);
     if (src_addr + asize > GLOBAL_MEM_SIZE)
       return -1;
+#ifdef VM_ENABLE
+    uint64_t pAddr = vm_mgr_->page_table_walk(src_addr);
+    DBGPRINT("  [RT:download] Download data to vAddr = 0x%lx (pAddr=0x%lx)\n", src_addr, pAddr);
+    src_addr = pAddr; // Overwirte
+#endif
 
     ram_.enable_acl(false);
-    ram_.read((uint8_t*)dest, src_addr, size);
+    ram_.read((uint8_t *)dest, src_addr, size);
     ram_.enable_acl(true);
 
     /*printf("VXDRV: download %ld bytes to 0x%lx:", size, uintptr_t((uint8_t*)dest));
@@ -190,22 +237,22 @@ public:
       future_.wait();
     }
 
-    // set kernel info
+    // set kernel info 
+    // SB-ATTN: maybe move setting satp to here
     this->dcr_write(VX_DCR_BASE_STARTUP_ADDR0, krnl_addr & 0xffffffff);
     this->dcr_write(VX_DCR_BASE_STARTUP_ADDR1, krnl_addr >> 32);
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG0, args_addr & 0xffffffff);
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG1, args_addr >> 32);
 
     // start new run
-    future_ = std::async(std::launch::async, [&]{
-      processor_.run();
-    });
+    future_ = std::async(std::launch::async, [&] { processor_.run(); });
 
     // clear mpm cache
     mpm_cache_.clear();
 
     return 0;
   }
+
 
   int ready_wait(uint64_t timeout) {
     if (!future_.valid())
@@ -232,11 +279,11 @@ public:
     return 0;
   }
 
-  int dcr_read(uint32_t addr, uint32_t* value) const {
+  int dcr_read(uint32_t addr, uint32_t *value) const {
     return dcrs_.read(addr, value);
   }
 
-  int mpm_query(uint32_t addr, uint32_t core_id, uint64_t* value) {
+  int mpm_query(uint32_t addr, uint32_t core_id, uint64_t *value) {
     uint32_t offset = addr - VX_CSR_MPM_BASE;
     if (offset > 31)
       return -1;
@@ -249,6 +296,27 @@ public:
     *value = mpm_cache_.at(core_id).at(offset);
     return 0;
   }
+#ifdef VM_ENABLE
+  /* VM Management */
+  int16_t init_VM() {
+    // Reserve space for PT
+    DBGPRINT("[RT:init_VM] Initialize VM\n");
+    DBGPRINT("* VM_ADDR_MODE=0x%lx", VM_ADDR_MODE);
+    DBGPRINT("* PAGE_TABLE_BASE_ADDR=0x%lx", PAGE_TABLE_BASE_ADDR);
+    DBGPRINT("* PT_LEVEL=0x%lx", PT_LEVEL);
+    DBGPRINT("* PT_SIZE=0x%lx", PT_SIZE);
+    DBGPRINT("* PTE_SIZE=0x%lx", PTE_SIZE);
+    DBGPRINT("* TLB_SIZE=0x%lx", TLB_SIZE);
+    CHECK_ERR(mem_reserve(PAGE_TABLE_BASE_ADDR, PT_SIZE_LIMIT, VX_MEM_READ_WRITE), {
+      return err;
+    });
+    // Mark that PAGE_TABLE_BASE_ADDR was successfully reserved so owner can
+    // safely release it in the destructor.
+    pt_reserved_ = true;
+    return vm_mgr_->init();
+  }
+
+#endif // VM_ENABLE
 
 private:
 
@@ -257,7 +325,16 @@ private:
   MemoryAllocator     global_mem_;
   DeviceConfig        dcrs_;
   std::future<void>   future_;
+  bool                pt_reserved_;
   std::unordered_map<uint32_t, std::array<uint64_t, 32>> mpm_cache_;
+#ifdef VM_ENABLE
+  /*
+  std::unordered_map<uint64_t, uint64_t> addr_mapping; // HW: key: ppn; value: vpn
+  MemoryAllocator *page_table_mem_;
+  MemoryAllocator *virtual_mem_;
+  */
+  std::unique_ptr<VMManager> vm_mgr_;
+#endif
 };
 
 #include <callbacks.inc>
