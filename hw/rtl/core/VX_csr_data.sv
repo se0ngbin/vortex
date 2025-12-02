@@ -66,9 +66,9 @@ import VX_fpu_pkg::*;
     input wire [UUID_WIDTH-1:0]         write_uuid,
     input wire [NW_WIDTH-1:0]           write_wid,
     input wire [`VX_CSR_ADDR_BITS-1:0]  write_addr,
-    input wire [`XLEN-1:0]              write_data,
+    input wire [`XLEN-1:0]              write_data
 `ifdef VM_ENABLE
-    output wire [`XLEN-1:0]             satp_value
+    ,output wire [`XLEN-1:0]            satp_value
 `endif
 );
 

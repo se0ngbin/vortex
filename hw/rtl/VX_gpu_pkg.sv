@@ -802,12 +802,21 @@ package VX_gpu_pkg;
     localparam DCACHE_NUM_REQS	    = `NUM_LSU_BLOCKS * DCACHE_CHANNELS;
 
     // Core request tag Id bits
-    localparam DCACHE_MERGED_REQS   = (`NUM_LSU_LANES * LSU_WORD_SIZE) / DCACHE_WORD_SIZE;
-    localparam DCACHE_MEM_BATCHES   = `CDIV(DCACHE_MERGED_REQS, DCACHE_CHANNELS);
-    localparam DCACHE_TAG_ID_BITS   = (`CLOG2(`LSUQ_OUT_SIZE) + `CLOG2(DCACHE_MEM_BATCHES));
+    localparam DCACHE_MERGED_REQS     = (`NUM_LSU_LANES * LSU_WORD_SIZE) / DCACHE_WORD_SIZE;
+    localparam DCACHE_MEM_BATCHES     = `CDIV(DCACHE_MERGED_REQS, DCACHE_CHANNELS);
+    localparam DCACHE_TAG_ID_BITS_BASE = (`CLOG2(`LSUQ_OUT_SIZE) + `CLOG2(DCACHE_MEM_BATCHES));
+
+`ifdef VM_ENABLE
+    // Additional bits for MMU tag expansion:
+    // - 2 bits: TLB serialization (4-to-1 lane encoding)
+    // - 1 bit: Merge arbiter (5-to-4 PTW vs normal path)
+    localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE + 3;
+`else
+    localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE;
+`endif
 
     // Core request tag bits
-    localparam DCACHE_TAG_WIDTH	    = (UUID_WIDTH + DCACHE_TAG_ID_BITS);
+    localparam DCACHE_TAG_WIDTH       = (UUID_WIDTH + DCACHE_TAG_ID_BITS);
 
     // Memory request data bits
     localparam DCACHE_MEM_DATA_WIDTH = (DCACHE_LINE_SIZE * 8);
