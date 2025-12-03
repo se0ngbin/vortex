@@ -45,6 +45,9 @@ module VX_execute import VX_gpu_pkg::*; #(
 
     // commit interface
     VX_commit_csr_if.slave  commit_csr_if
+`ifdef VM_ENABLE
+    ,output wire [`XLEN-1:0] satp_value
+`endif
 );
 
 `ifdef EXT_F_ENABLE
@@ -116,6 +119,10 @@ module VX_execute import VX_gpu_pkg::*; #(
         .commit_csr_if  (commit_csr_if),
         .sched_csr_if   (sched_csr_if),
         .warp_ctl_if    (warp_ctl_if)
+
+    `ifdef VM_ENABLE
+        ,.satp_value    (satp_value)
+    `endif
     );
 
 endmodule

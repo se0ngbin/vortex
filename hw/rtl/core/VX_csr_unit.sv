@@ -36,6 +36,9 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
     VX_sched_csr_if.slave       sched_csr_if,
     VX_execute_if.slave         execute_if,
     VX_result_if.master         result_if
+`ifdef VM_ENABLE
+    ,output wire [`XLEN-1:0]    satp_value
+`endif
 );
     `UNUSED_SPARAM (INSTANCE_ID)
     localparam PID_BITS = `CLOG2(`NUM_THREADS / NUM_LANES);
@@ -105,6 +108,10 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
         .write_wid      (execute_if.data.header.wid),
         .write_addr     (csr_addr),
         .write_data     (csr_write_data)
+
+    `ifdef VM_ENABLE
+        ,.satp_value    (satp_value)
+    `endif
     );
 
     // CSR read

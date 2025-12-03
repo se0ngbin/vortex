@@ -65,6 +65,16 @@ module VX_core import VX_gpu_pkg::*; #(
         .TAG_WIDTH (LSU_TAG_WIDTH)
     ) lsu_mem_if[`NUM_LSU_BLOCKS]();
 
+`ifdef VM_ENABLE
+    wire [`XLEN-1:0] satp_value;
+`endif
+
+    // Intermediate interface between VX_mem_unit and VX_mmu/dcache
+    VX_mem_bus_if #(
+        .DATA_SIZE (DCACHE_WORD_SIZE),
+        .TAG_WIDTH (DCACHE_TAG_WIDTH)
+    ) mem_unit_dcache_if [DCACHE_NUM_REQS]();
+
 `ifdef PERF_ENABLE
     lmem_perf_t lmem_perf;
     coalescer_perf_t coalescer_perf;
@@ -182,6 +192,10 @@ module VX_core import VX_gpu_pkg::*; #(
 
         .warp_ctl_if    (warp_ctl_if),
         .branch_ctl_if  (branch_ctl_if)
+
+    `ifdef VM_ENABLE
+        ,.satp_value    (satp_value)
+    `endif
     );
 
     VX_commit #(
@@ -208,8 +222,28 @@ module VX_core import VX_gpu_pkg::*; #(
         .coalescer_perf(coalescer_perf),
     `endif
         .lsu_mem_if    (lsu_mem_if),
-        .dcache_bus_if (dcache_bus_if)
+        .dcache_bus_if (mem_unit_dcache_if)
     );
+
+    // MMU integration: VX_mmu sits between VX_mem_unit and dcache
+`ifdef VM_ENABLE
+    VX_mmu #(
+        .NUM_REQS  (DCACHE_NUM_REQS),
+        .DATA_SIZE (DCACHE_WORD_SIZE),
+        .TAG_WIDTH (DCACHE_TAG_WIDTH)
+    ) mmu (
+        .clk           (clk),
+        .reset         (reset),
+        .satp          (satp_value),
+        .lsu_mem_if    (mem_unit_dcache_if),
+        .dcache_mem_if (dcache_bus_if)
+    );
+`else
+    // Direct connection when VM disabled
+    for (genvar i = 0; i < DCACHE_NUM_REQS; ++i) begin : g_dcache_bypass
+        `ASSIGN_VX_MEM_BUS_IF(dcache_bus_if[i], mem_unit_dcache_if[i]);
+    end
+`endif
 
 `ifdef PERF_ENABLE
 

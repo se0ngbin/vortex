@@ -13,6 +13,10 @@
 
 `include "VX_define.vh"
 
+// TODO: Tag width mismatch between VX_lsu_coalescer and dcache interface when VM_ENABLE
+// This needs proper tag width alignment in the memory hierarchy
+/* verilator lint_off WIDTHTRUNC */
+
 module VX_mem_unit import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = ""
 ) (
