@@ -3,7 +3,7 @@ include ../common.mk
 DESTDIR ?= $(CURDIR)
 
 CONFIG_FILE = $(DESTDIR)/rtlsim_config.stamp
-SRC_DIR = $(VORTEX_HOME)/sim/rtlsim 
+SRC_DIR = $(VORTEX_HOME)/sim/rtlsim
 
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wfatal-errors -Wno-array-bounds
 CXXFLAGS += -fPIC -Wno-maybe-uninitialized
@@ -66,8 +66,7 @@ RTL_PKGS += $(RTL_DIR)/VX_trace_pkg.sv
 
 SRCS = $(SW_COMMON_DIR)/util.cpp $(SW_COMMON_DIR)/mem.cpp $(SW_COMMON_DIR)/softfloat_ext.cpp $(SW_COMMON_DIR)/rvfloats.cpp $(SW_COMMON_DIR)/dram_sim.cpp
 SRCS += $(DPI_DIR)/dpi_util.cpp $(DPI_DIR)/dpi_float.cpp
-SRCS += $(RT_COMMON_DIR)/vm.cpp
-
+SRCS += $(SRC_DIR)/processor.cpp
 TOP = rtlsim_shim
 
 VL_FLAGS = --exe

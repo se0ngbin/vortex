@@ -144,6 +144,25 @@ vm(){
     echo "vm tests done!"
 }
 
+rtlsimvm(){
+    echo "begin vm tests..."
+
+    make -C runtime/rtlsim clean && CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=SV32" make -C runtime/rtlsim
+    make -C tests/opencl run-rtlsim
+    make -C tests/regression run-rtlsim
+
+    # sv39 doesnt work yet SB-ATTN
+    # make -C runtime/rtlsim clean && CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=SV39" make -C runtime/rtlsim
+    # make -C tests/opencl run-rtlsim
+    # make -C tests/regression run-rtlsim
+
+    make -C runtime/rtlsim clean && CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=BARE" make -C runtime/rtlsim
+    make -C tests/opencl run-rtlsim
+    make -C tests/regression run-rtlsim
+
+    echo "vm tests done!"
+}
+
 cache()
 {
     echo "begin cache tests..."
