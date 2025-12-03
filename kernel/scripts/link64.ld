@@ -205,6 +205,9 @@ SECTIONS
   __BSS_END__ = .;
     __global_pointer = MIN(__SDATA_BEGIN__ + 0x800,
 		            MAX(__DATA_BEGIN__ + 0x800, __BSS_END__ - 0x800));
+  . = ALIGN(0x1000);
+  _root_page_table_ptr = .;
+  .pgtable : { . += 0x1000; }
   _end = .; PROVIDE (end = .);
   . = DATA_SEGMENT_END (.);
   /* Stabs debugging sections.  */

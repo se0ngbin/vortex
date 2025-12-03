@@ -203,7 +203,7 @@ int16_t Processor::set_satp_by_addr(uint64_t base_addr) {
   if (satp_ == NULL)
     return 1;
   uint64_t satp = satp_->get_satp();
-  impl_->set_satp(satp);
+  // impl_->set_satp(satp);
   return 0;
 }
 bool Processor::is_satp_unset() {

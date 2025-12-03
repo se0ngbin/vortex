@@ -52,6 +52,27 @@ _start:
   # la t0, trap_entry
   # csrw mtvec, t0
 
+  # --- Virtual Memory Setup ---
+#ifdef VM_ENABLE
+  .extern _root_page_table_ptr
+  la    t0, _root_page_table_ptr    # Load root page table address
+  srli  t0, t0, 12                  # Convert to PPN
+#if VM_ADDR_MODE == SV39
+  li    t1, (8 << 60)
+  or    t0, t0, t1
+  csrw  satp, t0
+  sfence.vma
+#elif VM_ADDR_MODE == SV32
+  li    t1, (1 << 31)
+  or    t0, t0, t1
+  csrw  satp, t0
+  sfence.vma
+#else
+  /* Bare mode: do not set up page table or satp */
+#endif
+#endif
+  # --- End VM Setup ---
+
 #ifdef HAVE_INITFINI_ARRAY
   # run global initialization functions
   call  __libc_init_array
@@ -116,10 +137,10 @@ init_tls_all:
   .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
   call  __init_tls
   .insn r RISCV_CUSTOM0, 0, 0, x0, x0, x0  # tmc x0
-  ret
+   ret
 
 .section .data
-	.global __dso_handle
-	.weak __dso_handle
+.global __dso_handle
+.weak __dso_handle
 __dso_handle:
 	.long	0
