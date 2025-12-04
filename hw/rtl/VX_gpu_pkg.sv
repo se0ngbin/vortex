@@ -808,9 +808,9 @@ package VX_gpu_pkg;
 
 `ifdef VM_ENABLE
     // Additional bits for MMU tag expansion:
-    // - 2 bits: TLB serialization (4-to-1 lane encoding)
-    // - 1 bit: Merge arbiter (5-to-4 PTW vs normal path)
-    localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE + 3;
+    // - TLB serialization: UP(CLOG2(DCACHE_NUM_REQS)) bits for lane encoding
+    // - 1 bit: Merge arbiter (PTW vs normal path)
+    localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE + `UP(`CLOG2(DCACHE_NUM_REQS)) + 1;
 `else
     localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE;
 `endif

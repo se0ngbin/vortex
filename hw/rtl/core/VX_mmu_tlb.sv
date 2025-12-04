@@ -12,12 +12,12 @@
 /* verilator lint_off UNUSEDSIGNAL */
 
 module VX_mmu_tlb import VX_gpu_pkg::*; #(
-    parameter NUM_REQS       = 4,
-    parameter DATA_SIZE      = 4,
-    parameter TAG_WIDTH_IN   = 32,
-    parameter TAG_WIDTH_OUT  = 34,    // TAG_WIDTH_IN + 2 (source encoding)
-    parameter ADDR_WIDTH     = 30,
-    parameter FLAGS_WIDTH    = 1      // Simplified for skeleton
+    parameter NUM_REQS       = DCACHE_NUM_REQS,         // Coalesced requests from VX_mem_unit
+    parameter DATA_SIZE      = DCACHE_WORD_SIZE,        // 16 bytes (coalesced line size)
+    parameter TAG_WIDTH_IN   = DCACHE_TAG_WIDTH,        // Input tag width
+    parameter TAG_WIDTH_OUT  = TAG_WIDTH_IN + `UP(`CLOG2(NUM_REQS)),  // Parameterized source encoding
+    parameter ADDR_WIDTH     = DCACHE_ADDR_WIDTH,       // 28 bits for DATA_SIZE=16
+    parameter FLAGS_WIDTH    = MEM_FLAGS_WIDTH
 ) (
     input wire clk,
     input wire reset,
@@ -51,7 +51,7 @@ module VX_mmu_tlb import VX_gpu_pkg::*; #(
     localparam RSP_DATAW_IN  = DATA_WIDTH + TAG_WIDTH_IN;
     localparam RSP_DATAW_OUT = DATA_WIDTH + TAG_WIDTH_OUT;
 
-    localparam SOURCE_BITS   = 2;  // For 4 ports: ceil(log2(4)) = 2
+    localparam SOURCE_BITS   = `UP(`CLOG2(NUM_REQS));  // Parameterized source encoding
 
     // =========================================================================
     // Section 1: Request Path - Serialize (4-to-1)
@@ -332,41 +332,9 @@ module VX_mmu_tlb import VX_gpu_pkg::*; #(
             miss_sent <= 1'b0;
             victim_index <= '0;
 
-            // Initialize TLB entries on reset
-            // Entry 0: 4KB page - VPN 0x00001 -> PPN 0x80000
-            tlb_entries[0].valid      <= 1'b1;
-            tlb_entries[0].mru        <= 1'b0;
-            tlb_entries[0].page_level <= 2'd0;
-            tlb_entries[0].vpn        <= 20'h00001;
-            tlb_entries[0].ppn        <= 20'h80000;
-            tlb_entries[0].flags      <= 8'hFF;
-
-            // Entry 1: 4KB page - VPN 0x00002 -> PPN 0x80001
-            tlb_entries[1].valid      <= 1'b1;
-            tlb_entries[1].mru        <= 1'b0;
-            tlb_entries[1].page_level <= 2'd0;
-            tlb_entries[1].vpn        <= 20'h00002;
-            tlb_entries[1].ppn        <= 20'h80001;
-            tlb_entries[1].flags      <= 8'hFF;
-
-            // Entry 2: 4KB page - VPN 0x00003 -> PPN 0x80002
-            tlb_entries[2].valid      <= 1'b1;
-            tlb_entries[2].mru        <= 1'b0;
-            tlb_entries[2].page_level <= 2'd0;
-            tlb_entries[2].vpn        <= 20'h00003;
-            tlb_entries[2].ppn        <= 20'h80002;
-            tlb_entries[2].flags      <= 8'hFF;
-
-            // Entry 3: 4KB page - VPN 0x00004 -> PPN 0x80003
-            tlb_entries[3].valid      <= 1'b1;
-            tlb_entries[3].mru        <= 1'b0;
-            tlb_entries[3].page_level <= 2'd0;
-            tlb_entries[3].vpn        <= 20'h00004;
-            tlb_entries[3].ppn        <= 20'h80003;
-            tlb_entries[3].flags      <= 8'hFF;
-
-            // Invalidate remaining entries
-            for (int i = 4; i < TLB_SIZE; i++) begin
+            // Initialize ALL TLB entries as invalid on reset
+            // PTW fills TLB entries on TLB miss - no hardcoded mappings
+            for (int i = 0; i < TLB_SIZE; i++) begin
                 tlb_entries[i].valid      <= 1'b0;
                 tlb_entries[i].mru        <= 1'b0;
                 tlb_entries[i].page_level <= 2'd0;
@@ -455,13 +423,11 @@ module VX_mmu_tlb import VX_gpu_pkg::*; #(
     // Control Signals and Output (Miss-Buffer Only Design)
     // -------------------------------------------------------------------------
 
-    // Ready signal: depends on STATE only (not data/hit/miss)
-    // This is proper valid-ready semantics - ready means "I can accept"
-    // NOTE: Removed deser_req_ready dependency to break combinational loop.
-    // In READY state, we can always accept because:
-    // - On hit: output is valid same cycle, downstream should be ready
-    // - On miss: we buffer the request internally
-    assign ser_req_ready = (state == TLB_READY);
+    // Ready signal: depends on STATE and downstream ready
+    // With OUT_BUF=1 on VX_stream_switch, deser_req_ready comes from registered
+    // buffer state, breaking the combinational loop while providing proper
+    // backpressure propagation from dcache to TLB input.
+    assign ser_req_ready = (state == TLB_READY) && deser_req_ready;
 
     // Output valid:
     // - In READY state: hit in same cycle (combinational) - 0-cycle latency!
@@ -496,7 +462,7 @@ module VX_mmu_tlb import VX_gpu_pkg::*; #(
         .NUM_INPUTS  (1),
         .NUM_OUTPUTS (NUM_REQS),
         .DATAW       (REQ_DATAW_OUT),
-        .OUT_BUF     (0)
+        .OUT_BUF     (1)  // Use elastic buffer to break combinational loop and enable backpressure
     ) req_deserialize_switch (
         .clk       (clk),
         .reset     (reset),

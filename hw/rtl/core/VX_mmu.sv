@@ -4,19 +4,24 @@
 
 `include "VX_define.vh"
 
-// TODO: Tag width mismatches between MMU internal interfaces and dcache
-// need architectural alignment - currently suppressed for bypass testing
+// VX_mmu sits after VX_mem_unit in the datapath:
+//   VX_mem_unit coalesces LSU lanes (4×4=16 bytes) into DCACHE requests (1×16 bytes)
+//   VX_mmu receives DCACHE-formatted requests, translates VA→PA, outputs to dcache
+// Tag width architecture:
+// - TAG_WIDTH (input from VX_mem_unit) = DCACHE_TAG_WIDTH = UUID_WIDTH + DCACHE_TAG_ID_BITS
+// - TAG_WIDTH_OUT (output to dcache) = TAG_WIDTH + 3 (TLB serialize + merge arb)
 /* verilator lint_off WIDTHTRUNC */
 /* verilator lint_off WIDTHEXPAND */
 
 module VX_mmu import VX_gpu_pkg::*; #(
-    parameter NUM_REQS       = 4,
-    parameter DATA_SIZE      = 4,
-    parameter TAG_WIDTH      = 32,
+    parameter NUM_REQS       = DCACHE_NUM_REQS,         // Coalesced requests from VX_mem_unit
+    parameter DATA_SIZE      = DCACHE_WORD_SIZE,        // 16 bytes (coalesced line size)
+    parameter TAG_WIDTH      = DCACHE_TAG_WIDTH,        // DCACHE tag width
+    parameter TAG_WIDTH_OUT  = TAG_WIDTH + `UP(`CLOG2(NUM_REQS)) + 1,  // TLB source + merge arb
     parameter MEM_ADDR_WIDTH = `MEM_ADDR_WIDTH,
-    parameter ADDR_WIDTH     = MEM_ADDR_WIDTH - `CLOG2(DATA_SIZE),
-    parameter FLAGS_WIDTH    = MEM_FLAGS_WIDTH,  // Use actual width from VX_gpu_pkg
-    parameter EBUF_SIZE      = 2      // Elastic buffer depth
+    parameter ADDR_WIDTH     = MEM_ADDR_WIDTH - `CLOG2(DATA_SIZE),  // 28 bits for DATA_SIZE=16
+    parameter FLAGS_WIDTH    = MEM_FLAGS_WIDTH,
+    parameter EBUF_SIZE      = 2                        // Elastic buffer depth
 ) (
     input wire clk,
     input wire reset,
@@ -24,10 +29,10 @@ module VX_mmu import VX_gpu_pkg::*; #(
     // SATP from CSR (root page table address for PTW)
     input wire [31:0] satp,
 
-    // Input from LSU (via VX_mem_unit)
+    // Input from VX_mem_unit (DCACHE-formatted, TAG_WIDTH bits)
     VX_mem_bus_if.slave  lsu_mem_if [NUM_REQS],
 
-    // Output to dcache
+    // Output to dcache (TAG_WIDTH_OUT bits)
     VX_mem_bus_if.master dcache_mem_if [NUM_REQS]
 );
 
@@ -46,14 +51,17 @@ module VX_mmu import VX_gpu_pkg::*; #(
     localparam REQ_DATAW     = 1 + ADDR_WIDTH + DATA_WIDTH + DATA_SIZE + FLAGS_WIDTH + TAG_WIDTH;
     localparam RSP_DATAW     = DATA_WIDTH + TAG_WIDTH;
 
-    // Tag width after TLB serialize (adds 2 bits for source port encoding)
-    localparam TAG_WIDTH_TLB = TAG_WIDTH + 2;
+    // TLB source encoding bits: UP(CLOG2(NUM_REQS)) for routing back to correct port
+    localparam TLB_SOURCE_BITS = `UP(`CLOG2(NUM_REQS));
 
-    // Tag width after merge arbiter (adds 1 bit for 5-to-4 source encoding)
-    localparam TAG_WIDTH_OUT = TAG_WIDTH_TLB + 1;
+    // Tag width after TLB serialize
+    localparam TAG_WIDTH_TLB = TAG_WIDTH + TLB_SOURCE_BITS;
 
-    // Extra tag bits needed for bypass padding (TLB + arbiter encoding)
-    localparam TAG_PAD_BITS = TAG_WIDTH_OUT - TAG_WIDTH;  // 3 bits
+    // TAG_WIDTH_OUT is now a module parameter (TAG_WIDTH + TLB_SOURCE_BITS + 1)
+    // It accounts for: TLB_SOURCE_BITS (TLB serialization) + 1 bit (merge arbiter)
+
+    // Extra tag bits needed for bypass padding (TLB source + merge arbiter)
+    localparam TAG_PAD_BITS = TAG_WIDTH_OUT - TAG_WIDTH;  // TLB_SOURCE_BITS + 1
 
     // =========================================================================
     // Internal Interfaces
@@ -292,14 +300,17 @@ module VX_mmu import VX_gpu_pkg::*; #(
     // =========================================================================
 
     VX_mem_arb #(
-        .NUM_INPUTS  (NUM_REQS + 1),  // 5 inputs (4 TLB + 1 PTW)
-        .NUM_OUTPUTS (NUM_REQS),       // 4 outputs (to dcache)
-        .DATA_SIZE   (DATA_SIZE),
-        .TAG_WIDTH   (TAG_WIDTH_TLB),
-        .TAG_SEL_IDX (TAG_WIDTH_TLB),  // Insert merge bits at MSB
-        .ARBITER     ("R"),            // Round-robin
-        .REQ_OUT_BUF (2),
-        .RSP_OUT_BUF (2)
+        .NUM_INPUTS     (NUM_REQS + 1),   // 5 inputs (4 TLB + 1 PTW)
+        .NUM_OUTPUTS    (NUM_REQS),        // 4 outputs (to dcache)
+        .DATA_SIZE      (DATA_SIZE),
+        .TAG_WIDTH      (TAG_WIDTH_TLB),
+        .TAG_SEL_IDX    (TAG_WIDTH_TLB),   // Insert merge bits at MSB
+        .ARBITER        ("R"),             // Round-robin
+        .MEM_ADDR_WIDTH (MEM_ADDR_WIDTH),  // Must match interface
+        .ADDR_WIDTH     (ADDR_WIDTH),      // Must match interface
+        .FLAGS_WIDTH    (FLAGS_WIDTH),     // Must match interface
+        .REQ_OUT_BUF    (2),
+        .RSP_OUT_BUF    (2)
     ) merge_arb (
         .clk        (clk),
         .reset      (reset),

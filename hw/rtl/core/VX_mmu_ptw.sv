@@ -10,10 +10,10 @@
 /* verilator lint_off UNUSEDPARAM */
 
 module VX_mmu_ptw import VX_gpu_pkg::*; #(
-    parameter DATA_SIZE      = 4,
-    parameter TAG_WIDTH      = 34,
-    parameter ADDR_WIDTH     = 30,
-    parameter FLAGS_WIDTH    = 1      // Simplified for skeleton
+    parameter DATA_SIZE      = DCACHE_WORD_SIZE,        // 16 bytes (coalesced line size)
+    parameter TAG_WIDTH      = DCACHE_TAG_WIDTH + `UP(`CLOG2(DCACHE_NUM_REQS)),  // TLB extended tag
+    parameter ADDR_WIDTH     = DCACHE_ADDR_WIDTH,       // 28 bits for DATA_SIZE=16
+    parameter FLAGS_WIDTH    = MEM_FLAGS_WIDTH
 ) (
     input wire clk,
     input wire reset,
