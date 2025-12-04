@@ -5,3 +5,4 @@ HW_DIR := $(VORTEX_HOME)/hw
 RTL_DIR := $(HW_DIR)/rtl
 DPI_DIR := $(HW_DIR)/dpi
 SCRIPT_DIR := $(HW_DIR)/scripts
+RT_COMMON_DIR := $(VORTEX_HOME)/runtime/common

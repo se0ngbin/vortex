@@ -616,7 +616,7 @@ uint8_t MemoryUnit::get_mode()
 {
   assert(satp_!= NULL);
   return satp_->get_mode();
-}
+} // SB-ATTN: set_satp here (this is called by set_csr in emulator.cpp)
 void MemoryUnit::set_satp(uint64_t satp)
 {
   // uint16_t asid = 0; // set asid for different process

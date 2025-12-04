@@ -299,7 +299,7 @@ void Emulator::icache_read(void *data, uint64_t addr, uint32_t size) {
 }
 #endif
 
-#ifdef VM_ENABLE
+#ifdef VM_ENABLE // SB-ATTN: set_satp here, this is what is ran for simx
 void Emulator::set_satp(uint64_t satp) {
   DPH(3, "set satp 0x" << std::hex << satp << " in emulator module\n");
   set_csr(VX_CSR_SATP,satp,0,0);

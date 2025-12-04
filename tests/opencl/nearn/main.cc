@@ -2,6 +2,8 @@
 #define __NEAREST_NEIGHBOR__
 
 #include "nearestNeighbor.h"
+#include <string.h>
+#include <errno.h>
 
 cl_context context = NULL;
 
@@ -204,7 +206,7 @@ int loadData(char *filename, std::vector<Record> &records,
              std::vector<LatLong> &locations) {
   FILE *flist, *fp;
   int i = 0;
-  char dbname[64];
+  char dbname[256];
   int recNum = 0;
 
   /**Main processing **/
@@ -218,48 +220,82 @@ int loadData(char *filename, std::vector<Record> &records,
     * If this is the last file in the filelist, then done
     * else open next file to be read next iteration
     */       
-    if (fscanf(flist, "%s\n", dbname) != 1) {
-      printf("error reading filelist\n");
-      exit(0);
+    /* Read one filename (line) from the filelist into dbname. Use fgets to
+       avoid buffer overflow and to preserve filenames that contain spaces. */
+    if (!fgets(dbname, sizeof(dbname), flist)) {
+      // EOF or error reading next line -> stop processing filelist
+      break;
     }
-    printf("loading db: %s\n", dbname);
-    fp = fopen(dbname, "r");
-    if (!fp) {
-      printf("error opening a db\n");
-      exit(1);
-    }    
-    // read each record
-    while (!feof(fp)) {
-      Record record;
-      LatLong latLong;
-      fgets(record.recString, 49, fp);
-      fgetc(fp); // newline
-      if (feof(fp))
-        break;
-
-      // parse for lat and long
-      char substr[6];
-
-      for (i = 0; i < 5; i++)
-        substr[i] = *(record.recString + i + 28);
-      substr[5] = '\0';
-      latLong.lat = atof(substr);
-
-      for (i = 0; i < 5; i++)
-        substr[i] = *(record.recString + i + 33);
-      substr[5] = '\0';
-      latLong.lng = atof(substr);
-
-      locations.push_back(latLong);
-      records.push_back(record);
-      recNum++;
-      /*if (0 == (recNum % 500))
-        break;*/
+    /* strip trailing newline/carriage return */
+    size_t dlen = strlen(dbname);
+    while (dlen > 0 && (dbname[dlen - 1] == '\n' || dbname[dlen - 1] == '\r')) {
+      dbname[--dlen] = '\0';
     }
-    
-    /*if (++q == 3)
-        break;*/
-    fclose(fp);
+    if (dlen == 0) {
+      // empty line, skip
+      continue;
+    }
+    /* The filelist may contain one or more filenames per line. Some tools
+       may escape newlines as "\\n" inside the line; handle that by
+       splitting on the literal "\\n" sequence. Also trim whitespace. */
+    auto trim = [](char *s) -> char * {
+      // trim leading
+      while (*s && isspace((unsigned char)*s)) ++s;
+      if (*s == 0) return s;
+      // trim trailing
+      char *e = s + strlen(s) - 1;
+      while (e > s && isspace((unsigned char)*e)) *e-- = '\0';
+      return s;
+    };
+
+    char *start = dbname;
+    while (start && *start) {
+      char *sep = strstr(start, "\\n");
+      if (sep) {
+        *sep = '\0';
+      }
+      char *file = trim(start);
+      if (file && *file) {
+        printf("loading db: %s\n", file);
+        fp = fopen(file, "r");
+        if (!fp) {
+          fprintf(stderr, "error opening db '%s': %s\n", file, strerror(errno));
+        } else {
+          // process this file
+          while (!feof(fp)) {
+            Record record;
+            LatLong latLong;
+            fgets(record.recString, 49, fp);
+            fgetc(fp); // newline
+            if (feof(fp))
+              break;
+
+            // parse for lat and long
+            char substr[6];
+
+            for (i = 0; i < 5; i++)
+              substr[i] = *(record.recString + i + 28);
+            substr[5] = '\0';
+            latLong.lat = atof(substr);
+
+            for (i = 0; i < 5; i++)
+              substr[i] = *(record.recString + i + 33);
+            substr[5] = '\0';
+            latLong.lng = atof(substr);
+
+            locations.push_back(latLong);
+            records.push_back(record);
+            recNum++;
+          }
+          fclose(fp);
+        }
+      }
+      if (!sep) break;
+      start = sep + 2; // skip over "\\n"
+    }
+    /* If the file had been processed above (when splitting on "\\n"),
+       its records were already read and the file closed. Continue to the
+       next entry in the filelist. */
   }
   fclose(flist);
   return recNum;
