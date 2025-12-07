@@ -16,6 +16,12 @@
 #include <newlib.h>
 #include "common.h"
 
+#ifdef VM_ENABLE
+#define BARE 0
+#define SV32 1
+#define SV39 8
+#endif
+
 .section .init, "ax"
 .global _start
 .type   _start, @function
@@ -58,17 +64,18 @@ _start:
   la    t0, _root_page_table_ptr    # Load root page table address
   srli  t0, t0, 12                  # Convert to PPN
 #if VM_ADDR_MODE == SV39
-  li    t1, (8 << 60)
+  li    t1, 1
+  slli  t1, t1, 63
   or    t0, t0, t1
   csrw  satp, t0
   sfence.vma
 #elif VM_ADDR_MODE == SV32
-  li    t1, (1 << 31)
+  li    t1, 1
+  slli  t1, t1, 31
   or    t0, t0, t1
   csrw  satp, t0
   sfence.vma
 #else
-  /* Bare mode: do not set up page table or satp */
 #endif
 #endif
   # --- End VM Setup ---
