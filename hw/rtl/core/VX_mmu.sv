@@ -16,12 +16,12 @@
 module VX_mmu import VX_gpu_pkg::*; #(
     parameter NUM_REQS       = DCACHE_NUM_REQS,         // Coalesced requests from VX_mem_unit
     parameter DATA_SIZE      = DCACHE_WORD_SIZE,        // 16 bytes (coalesced line size)
-    parameter TAG_WIDTH      = DCACHE_TAG_WIDTH,        // DCACHE tag width
-    parameter TAG_WIDTH_OUT  = TAG_WIDTH + `UP(`CLOG2(NUM_REQS)) + 1,  // TLB source + merge arb
+    parameter TAG_WIDTH      = DCACHE_TAG_WIDTH_BASE,   // Input DCACHE tag width (before expansion)
     parameter MEM_ADDR_WIDTH = `MEM_ADDR_WIDTH,
     parameter ADDR_WIDTH     = MEM_ADDR_WIDTH - `CLOG2(DATA_SIZE),  // 28 bits for DATA_SIZE=16
     parameter FLAGS_WIDTH    = MEM_FLAGS_WIDTH,
     parameter EBUF_SIZE      = 2                        // Elastic buffer depth
+    // Output width = TAG_WIDTH + TLB_SOURCE_BITS + ARB_BITS (expanded by VX_mem_arb)
 ) (
     input wire clk,
     input wire reset,
@@ -37,31 +37,46 @@ module VX_mmu import VX_gpu_pkg::*; #(
 );
 
     // =========================================================================
-    // Section 0: Bypass Control
+    // Section 0: Address-Based Bypass Control
     // =========================================================================
 
-    // VM mode from SATP: 0 = BARE (bypass), 1 = SV32 (translate)
-    wire vm_enabled = satp[31];
+    // Address regions that bypass translation (SV32)
+    localparam [31:0] IO_REGION_END   = 32'h00010000;  // IO: 0x40 - 0x10000
+    localparam [31:0] STARTUP_ADDR    = 32'h80000000;  // Startup code base
+    localparam [31:0] STARTUP_END     = 32'h80040000;  // Startup code end
+    localparam [31:0] PT_BASE_ADDR    = 32'hF0000000;  // Page table region
+
+    // Address-based bypass decision function
+    // Returns 1 if address needs translation, 0 if bypass
+    function automatic logic needs_translation(input logic [31:0] full_addr);
+        // BARE mode (satp[31]=0) - always bypass
+        if (!satp[31]) return 1'b0;
+        // IO region - bypass
+        if (full_addr < IO_REGION_END) return 1'b0;
+        // Startup region - bypass
+        if (full_addr >= STARTUP_ADDR && full_addr < STARTUP_END) return 1'b0;
+        // Page table region - bypass
+        if (full_addr >= PT_BASE_ADDR) return 1'b0;
+        // User space - translate
+        return 1'b1;
+    endfunction
 
     // =========================================================================
     // Local Parameters
     // =========================================================================
 
     localparam DATA_WIDTH    = DATA_SIZE * 8;
-    localparam REQ_DATAW     = 1 + ADDR_WIDTH + DATA_WIDTH + DATA_SIZE + FLAGS_WIDTH + TAG_WIDTH;
-    localparam RSP_DATAW     = DATA_WIDTH + TAG_WIDTH;
 
     // TLB source encoding bits: UP(CLOG2(NUM_REQS)) for routing back to correct port
     localparam TLB_SOURCE_BITS = `UP(`CLOG2(NUM_REQS));
 
-    // Tag width after TLB serialize
+    // Tag width after TLB serialize (input + TLB source bits)
+    // VX_mem_arb will add additional bits for arbiter routing
     localparam TAG_WIDTH_TLB = TAG_WIDTH + TLB_SOURCE_BITS;
 
-    // TAG_WIDTH_OUT is now a module parameter (TAG_WIDTH + TLB_SOURCE_BITS + 1)
-    // It accounts for: TLB_SOURCE_BITS (TLB serialization) + 1 bit (merge arbiter)
-
-    // Extra tag bits needed for bypass padding (TLB source + merge arbiter)
-    localparam TAG_PAD_BITS = TAG_WIDTH_OUT - TAG_WIDTH;  // TLB_SOURCE_BITS + 1
+    // Request/response data widths use input TAG_WIDTH
+    localparam REQ_DATAW     = 1 + ADDR_WIDTH + DATA_WIDTH + DATA_SIZE + FLAGS_WIDTH + TAG_WIDTH;
+    localparam RSP_DATAW     = DATA_WIDTH + TAG_WIDTH;
 
     // =========================================================================
     // Internal Interfaces
@@ -81,6 +96,13 @@ module VX_mmu import VX_gpu_pkg::*; #(
         .FLAGS_WIDTH (FLAGS_WIDTH)
     ) tlb_out_if[NUM_REQS]();
 
+    // Bypass path interfaces - one per lane (tag padded to match TLB width)
+    VX_mem_bus_if #(
+        .DATA_SIZE   (DATA_SIZE),
+        .TAG_WIDTH   (TAG_WIDTH_TLB),
+        .FLAGS_WIDTH (FLAGS_WIDTH)
+    ) bypass_dcache_if[NUM_REQS]();
+
     // PTW memory interface (same tag width as TLB output)
     VX_mem_bus_if #(
         .DATA_SIZE   (DATA_SIZE),
@@ -88,38 +110,43 @@ module VX_mmu import VX_gpu_pkg::*; #(
         .FLAGS_WIDTH (FLAGS_WIDTH)
     ) ptw_mem_if();
 
-    // Combined interfaces for merge arbiter input (5 total: 4 TLB + 1 PTW)
+    // Combined interfaces for merge arbiter input (9 total: 4 bypass + 4 TLB + 1 PTW)
+    // Input mapping: [0..3]=bypass, [4..7]=TLB, [8]=PTW
     VX_mem_bus_if #(
         .DATA_SIZE   (DATA_SIZE),
         .TAG_WIDTH   (TAG_WIDTH_TLB),
         .FLAGS_WIDTH (FLAGS_WIDTH)
-    ) merge_in_if[NUM_REQS + 1]();
+    ) merge_in_if[2 * NUM_REQS + 1]();
 
-    // Arbiter output (intermediate, before bypass mux)
-    VX_mem_bus_if #(
-        .DATA_SIZE   (DATA_SIZE),
-        .TAG_WIDTH   (TAG_WIDTH_OUT),
-        .FLAGS_WIDTH (FLAGS_WIDTH)
-    ) arb_out_if[NUM_REQS]();
+    // Note: arb_out_if was removed - arbiter connects directly to dcache_mem_if
 
     // =========================================================================
-    // Section 1: Bidirectional Elastic Buffers
+    // Section 1: Bidirectional Elastic Buffers for TLB Path
     // =========================================================================
 
     // NOTE: We must pack/unpack individual fields because the interface's packed
     // req_data_t/rsp_data_t include tag_t with UUID_WIDTH, making them larger
     // than our REQ_DATAW/RSP_DATAW calculations assume.
     //
-    // In bypass mode (vm_enabled=0), elastic buffers are bypassed.
-    // In translate mode (vm_enabled=1), elastic buffers are used.
+    // These buffers are ONLY used for the TLB path (address needs translation).
+    // Bypass path goes directly to bypass_dcache_if without buffering.
+    // The decision is made per-lane based on address in Section 5.
 
-    // Intermediate signals for elastic buffer outputs (to avoid multiple drivers)
-    wire [NUM_REQS-1:0] ebuf_req_ready;  // Ready from elastic buffer to LSU
-    wire [NUM_REQS-1:0] ebuf_rsp_valid;  // Valid from elastic buffer to LSU
+    // Intermediate signals for elastic buffer outputs
+    wire [NUM_REQS-1:0] ebuf_req_ready;  // Ready from elastic buffer
+    wire [NUM_REQS-1:0] ebuf_rsp_valid;  // Valid from elastic buffer
     wire [DATA_WIDTH-1:0] ebuf_rsp_data [NUM_REQS];
     wire [TAG_WIDTH-1:0]  ebuf_rsp_tag  [NUM_REQS];
+    wire [NUM_REQS-1:0]   ebuf_rsp_ready; // Backpressure from response arbiter
+
+    // Per-lane translation decision (forward declared, assigned in Section 5)
+    wire [NUM_REQS-1:0] lane_needs_trans_ebuf;
 
     for (genvar i = 0; i < NUM_REQS; i++) begin : g_elastic_buffers
+
+        // Reconstruct full address for translation decision
+        wire [31:0] full_addr_ebuf = {lsu_mem_if[i].req_data.addr, {`CLOG2(DATA_SIZE){1'b0}}};
+        assign lane_needs_trans_ebuf[i] = needs_translation(full_addr_ebuf);
 
         // Packed request data for elastic buffer
         wire [REQ_DATAW-1:0] req_data_in_packed;
@@ -135,7 +162,7 @@ module VX_mmu import VX_gpu_pkg::*; #(
             lsu_mem_if[i].req_data.tag[TAG_WIDTH-1:0]
         };
 
-        // Request path buffer (LSU → TLB) - only used in translate mode
+        // Request path buffer (LSU → TLB) - only for translation path
         VX_elastic_buffer #(
             .DATAW  (REQ_DATAW),
             .SIZE   (EBUF_SIZE),
@@ -143,9 +170,9 @@ module VX_mmu import VX_gpu_pkg::*; #(
         ) req_buffer (
             .clk       (clk),
             .reset     (reset),
-            .valid_in  (vm_enabled ? lsu_mem_if[i].req_valid : 1'b0),  // Disable in bypass
+            .valid_in  (lsu_mem_if[i].req_valid && lane_needs_trans_ebuf[i]),  // Only when translating
             .data_in   (req_data_in_packed),
-            .ready_in  (ebuf_req_ready[i]),                             // Intermediate signal
+            .ready_in  (ebuf_req_ready[i]),
             .valid_out (buffered_if[i].req_valid),
             .data_out  (req_data_out_packed),
             .ready_out (buffered_if[i].req_ready)
@@ -169,7 +196,7 @@ module VX_mmu import VX_gpu_pkg::*; #(
             buffered_if[i].rsp_data.tag[TAG_WIDTH-1:0]
         };
 
-        // Response path buffer (TLB → LSU) - only used in translate mode
+        // Response path buffer (TLB → LSU)
         VX_elastic_buffer #(
             .DATAW  (RSP_DATAW),
             .SIZE   (EBUF_SIZE),
@@ -180,9 +207,9 @@ module VX_mmu import VX_gpu_pkg::*; #(
             .valid_in  (buffered_if[i].rsp_valid),
             .data_in   (rsp_data_in_packed),
             .ready_in  (buffered_if[i].rsp_ready),
-            .valid_out (ebuf_rsp_valid[i]),                             // Intermediate signal
+            .valid_out (ebuf_rsp_valid[i]),
             .data_out  (rsp_data_out_packed),
-            .ready_out (vm_enabled ? lsu_mem_if[i].rsp_ready : 1'b1)    // Always ready in bypass
+            .ready_out (ebuf_rsp_ready[i])  // Backpressure from response arbiter
         );
 
         // Unpack elastic buffer output to intermediate signals
@@ -272,137 +299,187 @@ module VX_mmu import VX_gpu_pkg::*; #(
     );
 
     // =========================================================================
-    // Section 5: Connect TLB and PTW outputs to merge arbiter inputs
+    // Section 5: Per-Lane Bypass Path Logic
     // =========================================================================
+    // For each lane, check address and route to bypass or TLB path
+    // Bypass path: no translation needed, pad tag with zeros at LSB
+    // TLB path: translation needed, goes through elastic buffer → TLB
 
-    // Connect TLB outputs [0:3] to merge_in_if [0:3]
-    for (genvar i = 0; i < NUM_REQS; i++) begin : g_tlb_to_merge
-        assign merge_in_if[i].req_valid = tlb_out_if[i].req_valid;
-        assign merge_in_if[i].req_data  = tlb_out_if[i].req_data;
-        assign tlb_out_if[i].req_ready  = merge_in_if[i].req_ready;
+    // Per-lane bypass decision signals
+    wire [NUM_REQS-1:0] lane_needs_trans;
+    wire [NUM_REQS-1:0] lane_bypass;
 
-        assign tlb_out_if[i].rsp_valid  = merge_in_if[i].rsp_valid;
-        assign tlb_out_if[i].rsp_data   = merge_in_if[i].rsp_data;
-        assign merge_in_if[i].rsp_ready = tlb_out_if[i].rsp_ready;
+    for (genvar i = 0; i < NUM_REQS; i++) begin : g_bypass_path
+        // Reconstruct full 32-bit address from ADDR_WIDTH address
+        // ADDR_WIDTH = MEM_ADDR_WIDTH - CLOG2(DATA_SIZE) = 32 - 4 = 28 bits
+        // Full address = {addr[27:0], 4'b0000} for DATA_SIZE=16
+        wire [31:0] full_addr = {lsu_mem_if[i].req_data.addr, {`CLOG2(DATA_SIZE){1'b0}}};
+
+        assign lane_needs_trans[i] = needs_translation(full_addr);
+        assign lane_bypass[i] = ~lane_needs_trans[i];
+
+        // Drive bypass_dcache_if - only valid when bypass (no translation needed)
+        assign bypass_dcache_if[i].req_valid = lsu_mem_if[i].req_valid && lane_bypass[i];
+        assign bypass_dcache_if[i].req_data.rw     = lsu_mem_if[i].req_data.rw;
+        assign bypass_dcache_if[i].req_data.addr   = lsu_mem_if[i].req_data.addr;
+        assign bypass_dcache_if[i].req_data.data   = lsu_mem_if[i].req_data.data;
+        assign bypass_dcache_if[i].req_data.byteen = lsu_mem_if[i].req_data.byteen;
+        assign bypass_dcache_if[i].req_data.flags  = lsu_mem_if[i].req_data.flags;
+
+        // Pad tag with zeros at LSB to match TLB tag width
+        // TLB uses VX_bits_insert with POS=0, so TLB source bits are at LSB
+        // Bypass pads zeros at same position: {original_tag, {TLB_SOURCE_BITS{1'b0}}}
+        assign bypass_dcache_if[i].req_data.tag = {lsu_mem_if[i].req_data.tag[TAG_WIDTH-1:0],
+                                                   {TLB_SOURCE_BITS{1'b0}}};
+
+        // bypass_dcache_if[i].rsp_ready is now set by response arbiter in Section 8
     end
 
-    // Connect PTW output to merge_in_if [4]
-    assign merge_in_if[NUM_REQS].req_valid = ptw_mem_if.req_valid;
-    assign merge_in_if[NUM_REQS].req_data  = ptw_mem_if.req_data;
-    assign ptw_mem_if.req_ready            = merge_in_if[NUM_REQS].req_ready;
+    // =========================================================================
+    // Section 6: Connect All Paths to Merge Arbiter Inputs
+    // =========================================================================
+    // Input mapping: [0..NUM_REQS-1]=bypass, [NUM_REQS..2*NUM_REQS-1]=TLB, [2*NUM_REQS]=PTW
 
-    assign ptw_mem_if.rsp_valid            = merge_in_if[NUM_REQS].rsp_valid;
-    assign ptw_mem_if.rsp_data             = merge_in_if[NUM_REQS].rsp_data;
-    assign merge_in_if[NUM_REQS].rsp_ready = ptw_mem_if.rsp_ready;
+    // Connect bypass outputs [0:3] to merge_in_if [0:3]
+    for (genvar i = 0; i < NUM_REQS; i++) begin : g_bypass_to_merge
+        assign merge_in_if[i].req_valid = bypass_dcache_if[i].req_valid;
+        assign merge_in_if[i].req_data  = bypass_dcache_if[i].req_data;
+        assign bypass_dcache_if[i].req_ready  = merge_in_if[i].req_ready;
+
+        assign bypass_dcache_if[i].rsp_valid  = merge_in_if[i].rsp_valid;
+        assign bypass_dcache_if[i].rsp_data   = merge_in_if[i].rsp_data;
+        assign merge_in_if[i].rsp_ready = bypass_dcache_if[i].rsp_ready;
+    end
+
+    // Connect TLB outputs [0:3] to merge_in_if [4:7]
+    for (genvar i = 0; i < NUM_REQS; i++) begin : g_tlb_to_merge
+        assign merge_in_if[NUM_REQS + i].req_valid = tlb_out_if[i].req_valid;
+        assign merge_in_if[NUM_REQS + i].req_data  = tlb_out_if[i].req_data;
+        assign tlb_out_if[i].req_ready  = merge_in_if[NUM_REQS + i].req_ready;
+
+        assign tlb_out_if[i].rsp_valid  = merge_in_if[NUM_REQS + i].rsp_valid;
+        assign tlb_out_if[i].rsp_data   = merge_in_if[NUM_REQS + i].rsp_data;
+        assign merge_in_if[NUM_REQS + i].rsp_ready = tlb_out_if[i].rsp_ready;
+    end
+
+    // Connect PTW output to merge_in_if [8]
+    assign merge_in_if[2 * NUM_REQS].req_valid = ptw_mem_if.req_valid;
+    assign merge_in_if[2 * NUM_REQS].req_data  = ptw_mem_if.req_data;
+    assign ptw_mem_if.req_ready            = merge_in_if[2 * NUM_REQS].req_ready;
+
+    assign ptw_mem_if.rsp_valid            = merge_in_if[2 * NUM_REQS].rsp_valid;
+    assign ptw_mem_if.rsp_data             = merge_in_if[2 * NUM_REQS].rsp_data;
+    assign merge_in_if[2 * NUM_REQS].rsp_ready = ptw_mem_if.rsp_ready;
 
     // =========================================================================
-    // Section 6: Merge Arbiter (5-to-4)
+    // Section 7: Merge Arbiter (9-to-4)
     // =========================================================================
 
     VX_mem_arb #(
-        .NUM_INPUTS     (NUM_REQS + 1),   // 5 inputs (4 TLB + 1 PTW)
-        .NUM_OUTPUTS    (NUM_REQS),        // 4 outputs (to dcache)
+        .NUM_INPUTS     (2 * NUM_REQS + 1),   // 9 inputs (4 bypass + 4 TLB + 1 PTW)
+        .NUM_OUTPUTS    (NUM_REQS),            // 4 outputs (to dcache)
         .DATA_SIZE      (DATA_SIZE),
         .TAG_WIDTH      (TAG_WIDTH_TLB),
-        .TAG_SEL_IDX    (TAG_WIDTH_TLB),   // Insert merge bits at MSB
-        .ARBITER        ("R"),             // Round-robin
-        .MEM_ADDR_WIDTH (MEM_ADDR_WIDTH),  // Must match interface
-        .ADDR_WIDTH     (ADDR_WIDTH),      // Must match interface
-        .FLAGS_WIDTH    (FLAGS_WIDTH),     // Must match interface
+        .TAG_SEL_IDX    (TAG_WIDTH_TLB),       // Insert merge bits at MSB
+        .ARBITER        ("R"),                 // Round-robin
+        .MEM_ADDR_WIDTH (MEM_ADDR_WIDTH),      // Must match interface
+        .ADDR_WIDTH     (ADDR_WIDTH),          // Must match interface
+        .FLAGS_WIDTH    (FLAGS_WIDTH),         // Must match interface
         .REQ_OUT_BUF    (2),
         .RSP_OUT_BUF    (2)
     ) merge_arb (
         .clk        (clk),
         .reset      (reset),
         .bus_in_if  (merge_in_if),
-        .bus_out_if (arb_out_if)       // Output to intermediate interface
+        .bus_out_if (dcache_mem_if)    // Connect directly to dcache output
     );
 
     // =========================================================================
-    // Section 7: Output Mux (Bypass vs Translation)
+    // Section 8: LSU Interface Connections
     // =========================================================================
     //
-    // vm_enabled = 0 (BARE):  lsu_mem_if → dcache_mem_if (direct bypass)
-    // vm_enabled = 1 (SV32):  arb_out_if → dcache_mem_if (translated path)
+    // With address-based bypass, both bypass and TLB paths go through the arbiter.
+    // The arbiter (merge_arb) connects directly to dcache_mem_if.
+    // Responses are automatically routed back through arbiter to:
+    //   - bypass_dcache_if (for bypass path responses)
+    //   - tlb_out_if → TLB → elastic buffer (for TLB path responses)
     //
-    // Tag width handling:
-    //   - Bypass: pad lsu_mem_if tag (32-bit) with zeros → 35-bit
-    //   - Translate: arb_out_if already has 35-bit tag
+    // This section handles:
+    //   1. LSU request ready (from bypass or TLB elastic buffer)
+    //   2. LSU response merging (bypass + TLB responses)
 
-    for (genvar i = 0; i < NUM_REQS; i++) begin : g_output_mux
-
-        // =====================================================================
-        // Request Path to Dcache
-        // =====================================================================
-
-        assign dcache_mem_if[i].req_valid = vm_enabled ?
-            arb_out_if[i].req_valid : lsu_mem_if[i].req_valid;
-
-        assign dcache_mem_if[i].req_data.rw = vm_enabled ?
-            arb_out_if[i].req_data.rw : lsu_mem_if[i].req_data.rw;
-
-        assign dcache_mem_if[i].req_data.addr = vm_enabled ?
-            arb_out_if[i].req_data.addr : lsu_mem_if[i].req_data.addr;
-
-        assign dcache_mem_if[i].req_data.data = vm_enabled ?
-            arb_out_if[i].req_data.data : lsu_mem_if[i].req_data.data;
-
-        assign dcache_mem_if[i].req_data.byteen = vm_enabled ?
-            arb_out_if[i].req_data.byteen : lsu_mem_if[i].req_data.byteen;
-
-        assign dcache_mem_if[i].req_data.flags = vm_enabled ?
-            arb_out_if[i].req_data.flags : lsu_mem_if[i].req_data.flags;
-
-        // Tag: pad with zeros in bypass mode (32-bit → 35-bit)
-        assign dcache_mem_if[i].req_data.tag = vm_enabled ?
-            arb_out_if[i].req_data.tag :
-            {{TAG_PAD_BITS{1'b0}}, lsu_mem_if[i].req_data.tag[TAG_WIDTH-1:0]};
+    for (genvar i = 0; i < NUM_REQS; i++) begin : g_lsu_if
 
         // =====================================================================
-        // Request Ready - back to sources
+        // LSU Request Ready
         // =====================================================================
+        // If bypass: ready from bypass_dcache_if.req_ready (through arbiter)
+        // If translate: ready from elastic buffer (ebuf_req_ready)
 
-        // Arbiter ready: from dcache when translating, 0 when bypassing
-        assign arb_out_if[i].req_ready = vm_enabled ?
-            dcache_mem_if[i].req_ready : 1'b0;
-
-        // LSU ready: from elastic buffer when translating, from dcache when bypassing
-        assign lsu_mem_if[i].req_ready = vm_enabled ?
-            ebuf_req_ready[i] : dcache_mem_if[i].req_ready;
+        assign lsu_mem_if[i].req_ready = lane_needs_trans_ebuf[i] ?
+            ebuf_req_ready[i] : bypass_dcache_if[i].req_ready;
 
         // =====================================================================
-        // Response Path from Dcache
+        // LSU Response Arbitration (Bypass + TLB responses)
         // =====================================================================
+        //
+        // Bypass and TLB responses can arrive simultaneously (different transactions).
+        // Use VX_stream_arb for proper arbitration with backpressure.
+        //
+        // Tag restoration:
+        // - Bypass: tag has {original_tag, zeros_at_LSB}, extract [TAG_WIDTH_TLB-1:TLB_SOURCE_BITS]
+        // - TLB: ebuf_rsp_tag is already TAG_WIDTH bits (TLB internally restored tag)
 
-        // LSU response valid: from elastic buffer when translating, from dcache when bypassing
-        assign lsu_mem_if[i].rsp_valid = vm_enabled ?
-            ebuf_rsp_valid[i] : dcache_mem_if[i].rsp_valid;
+        // Response data width: data + tag
+        localparam LSU_RSP_DATAW = DATA_WIDTH + TAG_WIDTH;
 
-        // Arbiter response valid: from dcache when translating, 0 when bypassing
-        assign arb_out_if[i].rsp_valid = vm_enabled ?
-            dcache_mem_if[i].rsp_valid : 1'b0;
+        // Pack bypass response: extract original tag from TLB-width tag
+        wire [TAG_WIDTH-1:0] bypass_rsp_tag_restored =
+            bypass_dcache_if[i].rsp_data.tag[TAG_WIDTH_TLB-1:TLB_SOURCE_BITS];
+        wire [LSU_RSP_DATAW-1:0] bypass_rsp_packed = {
+            bypass_dcache_if[i].rsp_data.data,
+            bypass_rsp_tag_restored
+        };
 
-        // LSU response data: from elastic buffer when translating, from dcache when bypassing
-        assign lsu_mem_if[i].rsp_data.data = vm_enabled ?
-            ebuf_rsp_data[i] : dcache_mem_if[i].rsp_data.data;
+        // Pack ebuf response
+        wire [LSU_RSP_DATAW-1:0] ebuf_rsp_packed = {
+            ebuf_rsp_data[i],
+            ebuf_rsp_tag[i]
+        };
 
-        // Arbiter response data: from dcache when translating
-        assign arb_out_if[i].rsp_data.data = dcache_mem_if[i].rsp_data.data;
+        // Arbiter input/output signals
+        wire [1:0] rsp_arb_valid_in = {ebuf_rsp_valid[i], bypass_dcache_if[i].rsp_valid};
+        wire [1:0][LSU_RSP_DATAW-1:0] rsp_arb_data_in = {ebuf_rsp_packed, bypass_rsp_packed};
+        wire [1:0] rsp_arb_ready_in;
+        wire rsp_arb_valid_out;
+        wire [LSU_RSP_DATAW-1:0] rsp_arb_data_out;
 
-        // LSU response tag: from elastic buffer when translating, strip upper bits when bypassing
-        assign lsu_mem_if[i].rsp_data.tag = vm_enabled ?
-            ebuf_rsp_tag[i] : dcache_mem_if[i].rsp_data.tag[TAG_WIDTH-1:0];
+        VX_stream_arb #(
+            .NUM_INPUTS  (2),
+            .NUM_OUTPUTS (1),
+            .DATAW       (LSU_RSP_DATAW),
+            .ARBITER     ("R"),   // Round-robin for fairness
+            .OUT_BUF     (0)
+        ) rsp_arb (
+            .clk       (clk),
+            .reset     (reset),
+            .valid_in  (rsp_arb_valid_in),
+            .data_in   (rsp_arb_data_in),
+            .ready_in  (rsp_arb_ready_in),
+            .valid_out (rsp_arb_valid_out),
+            .data_out  (rsp_arb_data_out),
+            .ready_out (lsu_mem_if[i].rsp_ready),
+            `UNUSED_PIN (sel_out)
+        );
 
-        // Arbiter response tag: from dcache when translating
-        assign arb_out_if[i].rsp_data.tag = dcache_mem_if[i].rsp_data.tag;
+        // Connect arbiter ready outputs to sources
+        assign bypass_dcache_if[i].rsp_ready = rsp_arb_ready_in[0];
+        assign ebuf_rsp_ready[i] = rsp_arb_ready_in[1];
 
-        // =====================================================================
-        // Response Ready - back to dcache
-        // =====================================================================
-
-        // Dcache response ready: from arbiter when translating, from LSU when bypassing
-        assign dcache_mem_if[i].rsp_ready = vm_enabled ?
-            arb_out_if[i].rsp_ready : lsu_mem_if[i].rsp_ready;
+        // Unpack arbiter output to LSU interface
+        assign lsu_mem_if[i].rsp_valid = rsp_arb_valid_out;
+        assign lsu_mem_if[i].rsp_data.data = rsp_arb_data_out[LSU_RSP_DATAW-1 -: DATA_WIDTH];
+        assign lsu_mem_if[i].rsp_data.tag = rsp_arb_data_out[TAG_WIDTH-1:0];
 
     end
 

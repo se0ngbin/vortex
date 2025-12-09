@@ -88,6 +88,10 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
     reg [PPN_WIDTH-1:0] final_ppn;
     reg [7:0]  final_flags;
 
+    // Registered PTE address for word selection during response
+    // Captures address when request fires, used for selecting correct word from response
+    reg [31:0] req_pte_addr_r;
+
     // =========================================================================
     // VPN Extraction (SV32: 10-bit VPN per level)
     // =========================================================================
@@ -131,10 +135,11 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
     wire [DATA_WIDTH-1:0] rsp_data_full = ptw_mem_if.rsp_data.data;
 
     // Select the correct 32-bit word based on address bits
-    // pte_addr[SEL_BITS+1:2] selects which 4-byte word within the cache line
+    // Use registered address (req_pte_addr_r) to select word during response
+    // This avoids timing issue where pte_addr changes before response arrives
     wire [31:0] pte_data;
     if (NUM_WORDS > 1) begin : g_pte_select
-        wire [SEL_BITS-1:0] word_sel = pte_addr[SEL_BITS+1:2];
+        wire [SEL_BITS-1:0] word_sel = req_pte_addr_r[SEL_BITS+1:2];
         assign pte_data = rsp_data_full[word_sel * 32 +: 32];
     end else begin : g_pte_direct
         assign pte_data = rsp_data_full[31:0];
@@ -164,6 +169,7 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
             l1_ppn <= 20'b0;
             final_ppn <= 20'b0;
             final_flags <= 8'b0;
+            req_pte_addr_r <= 32'b0;
         end else begin
             state <= state_next;
 
@@ -172,6 +178,20 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
                     // Capture miss virtual address on handshake
                     if (miss_valid && miss_ready) begin
                         pending_vaddr <= miss_vaddr;
+                    end
+                end
+
+                PTW_L1_REQ: begin
+                    // Capture L1 PTE address when request fires
+                    if (mem_req_fire) begin
+                        req_pte_addr_r <= l1_pte_addr;
+                    end
+                end
+
+                PTW_L0_REQ: begin
+                    // Capture L0 PTE address when request fires
+                    if (mem_req_fire) begin
+                        req_pte_addr_r <= l0_pte_addr;
                     end
                 end
 

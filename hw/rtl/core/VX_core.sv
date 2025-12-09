@@ -70,9 +70,10 @@ module VX_core import VX_gpu_pkg::*; #(
 `endif
 
     // Intermediate interface between VX_mem_unit and VX_mmu/dcache
+    // Uses base tag width (VX_mmu expands to DCACHE_TAG_WIDTH for dcache output)
     VX_mem_bus_if #(
         .DATA_SIZE (DCACHE_WORD_SIZE),
-        .TAG_WIDTH (DCACHE_TAG_WIDTH)
+        .TAG_WIDTH (DCACHE_TAG_WIDTH_BASE)
     ) mem_unit_dcache_if [DCACHE_NUM_REQS]();
 
 `ifdef PERF_ENABLE
@@ -230,7 +231,7 @@ module VX_core import VX_gpu_pkg::*; #(
     VX_mmu #(
         .NUM_REQS  (DCACHE_NUM_REQS),
         .DATA_SIZE (DCACHE_WORD_SIZE),
-        .TAG_WIDTH (DCACHE_TAG_WIDTH)
+        .TAG_WIDTH (DCACHE_TAG_WIDTH_BASE)
     ) mmu (
         .clk           (clk),
         .reset         (reset),

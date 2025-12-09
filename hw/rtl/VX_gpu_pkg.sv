@@ -806,26 +806,38 @@ package VX_gpu_pkg;
     localparam DCACHE_MEM_BATCHES     = `CDIV(DCACHE_MERGED_REQS, DCACHE_CHANNELS);
     localparam DCACHE_TAG_ID_BITS_BASE = (`CLOG2(`LSUQ_OUT_SIZE) + `CLOG2(DCACHE_MEM_BATCHES));
 
-`ifdef VM_ENABLE
-    // Additional bits for MMU tag expansion:
-    // - TLB serialization: UP(CLOG2(DCACHE_NUM_REQS)) bits for lane encoding
-    // - 1 bit: Merge arbiter (PTW vs normal path)
-    localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE + `UP(`CLOG2(DCACHE_NUM_REQS)) + 1;
-`else
+    // Core request tag Id bits
     localparam DCACHE_TAG_ID_BITS = DCACHE_TAG_ID_BITS_BASE;
-`endif
 
-    // Core request tag bits
-    localparam DCACHE_TAG_WIDTH       = (UUID_WIDTH + DCACHE_TAG_ID_BITS);
+    // Base tag width (internal to core, before MMU expansion)
+    // Used by VX_mem_unit, VX_mmu input interface
+    localparam DCACHE_TAG_WIDTH_BASE = (UUID_WIDTH + DCACHE_TAG_ID_BITS);
+
+`ifdef VM_ENABLE
+    // MMU expansion bits
+    // - TLB serialization: UP(CLOG2(DCACHE_NUM_REQS)) bits for lane encoding
+    // - ARB bits: Merge arbiter selector (bypass + TLB + PTW paths)
+    localparam DCACHE_TLB_SOURCE_BITS = `UP(`CLOG2(DCACHE_NUM_REQS));
+    localparam DCACHE_ARB_BITS        = `CLOG2(`CDIV(2 * DCACHE_NUM_REQS + 1, DCACHE_NUM_REQS));
+
+    // DCACHE_TAG_WIDTH = external dcache interface width (expanded by MMU)
+    // Used by VX_core_top, VX_socket, VX_dcache interfaces
+    localparam DCACHE_TAG_WIDTH     = DCACHE_TAG_WIDTH_BASE + DCACHE_TLB_SOURCE_BITS + DCACHE_ARB_BITS;
+    localparam DCACHE_TAG_WIDTH_MMU = DCACHE_TAG_WIDTH;  // Alias for compatibility
+`else
+    // When VM disabled, no expansion needed
+    localparam DCACHE_TAG_WIDTH     = DCACHE_TAG_WIDTH_BASE;
+    localparam DCACHE_TAG_WIDTH_MMU = DCACHE_TAG_WIDTH;
+`endif
 
     // Memory request data bits
     localparam DCACHE_MEM_DATA_WIDTH = (DCACHE_LINE_SIZE * 8);
 
-    // Memory request tag bits
+    // Memory request tag bits (use MMU-expanded width for cache interface)
 `ifdef DCACHE_ENABLE
-    localparam DCACHE_MEM_TAG_WIDTH = `CACHE_CLUSTER_NC_MEM_TAG_WIDTH(`DCACHE_MSHR_SIZE, `DCACHE_NUM_BANKS, DCACHE_NUM_REQS, `L1_MEM_PORTS, DCACHE_LINE_SIZE, DCACHE_WORD_SIZE, DCACHE_TAG_WIDTH, `SOCKET_SIZE, `NUM_DCACHES, UUID_WIDTH);
+    localparam DCACHE_MEM_TAG_WIDTH = `CACHE_CLUSTER_NC_MEM_TAG_WIDTH(`DCACHE_MSHR_SIZE, `DCACHE_NUM_BANKS, DCACHE_NUM_REQS, `L1_MEM_PORTS, DCACHE_LINE_SIZE, DCACHE_WORD_SIZE, DCACHE_TAG_WIDTH_MMU, `SOCKET_SIZE, `NUM_DCACHES, UUID_WIDTH);
 `else
-    localparam DCACHE_MEM_TAG_WIDTH = `CACHE_CLUSTER_BYPASS_MEM_TAG_WIDTH(DCACHE_NUM_REQS, `L1_MEM_PORTS, DCACHE_LINE_SIZE, DCACHE_WORD_SIZE, DCACHE_TAG_WIDTH, `SOCKET_SIZE, `NUM_DCACHES);
+    localparam DCACHE_MEM_TAG_WIDTH = `CACHE_CLUSTER_BYPASS_MEM_TAG_WIDTH(DCACHE_NUM_REQS, `L1_MEM_PORTS, DCACHE_LINE_SIZE, DCACHE_WORD_SIZE, DCACHE_TAG_WIDTH_MMU, `SOCKET_SIZE, `NUM_DCACHES);
 `endif
 
     /////////////////////////////// L1 Parameters /////////////////////////////

@@ -141,7 +141,7 @@ module VX_mem_unit import VX_gpu_pkg::*; #(
     VX_lsu_mem_if #(
         .NUM_LANES (DCACHE_CHANNELS),
         .DATA_SIZE (DCACHE_WORD_SIZE),
-        .TAG_WIDTH (DCACHE_TAG_WIDTH)
+        .TAG_WIDTH (DCACHE_TAG_WIDTH_BASE)
     ) dcache_coalesced_if[`NUM_LSU_BLOCKS]();
 
 `ifdef PERF_ENABLE
@@ -235,14 +235,14 @@ module VX_mem_unit import VX_gpu_pkg::*; #(
 
         VX_mem_bus_if #(
             .DATA_SIZE (DCACHE_WORD_SIZE),
-            .TAG_WIDTH (DCACHE_TAG_WIDTH)
+            .TAG_WIDTH (DCACHE_TAG_WIDTH_BASE)
         ) dcache_bus_tmp_if[DCACHE_CHANNELS]();
 
         VX_lsu_adapter #(
             .NUM_LANES    (DCACHE_CHANNELS),
             .DATA_SIZE    (DCACHE_WORD_SIZE),
-            .TAG_WIDTH    (DCACHE_TAG_WIDTH),
-            .TAG_SEL_BITS (DCACHE_TAG_WIDTH - UUID_WIDTH),
+            .TAG_WIDTH    (DCACHE_TAG_WIDTH_BASE),
+            .TAG_SEL_BITS (DCACHE_TAG_WIDTH_BASE - UUID_WIDTH),
             .ARBITER      ("P"),
             .REQ_OUT_BUF  (0),
             .RSP_OUT_BUF  (0)
