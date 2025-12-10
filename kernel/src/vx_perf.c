@@ -32,7 +32,8 @@ extern "C" {
 
 void vx_perf_dump() {
     int core_id = vx_core_id();
-    uint32_t * const csr_mem = (uint32_t*)(IO_MPM_ADDR + 64 * sizeof(uint32_t) * core_id);
+    // 96 uint32_t = 48 uint64_t counters per core (extended to support TLB counters at B20-B24)
+    uint32_t * const csr_mem = (uint32_t*)(IO_MPM_ADDR + 96 * sizeof(uint32_t) * core_id);
     DUMP_CSRS(0);
     //DUMP_CSRS(1); reserved for exitcode
     DUMP_CSRS(2);
@@ -65,6 +66,15 @@ void vx_perf_dump() {
     DUMP_CSRS(29);
     DUMP_CSRS(30);
     DUMP_CSRS(31);
+#ifdef VM_ENABLE
+    // TLB performance counters (B20-B24, offset 32-36)
+    DUMP_CSRS(32);  // VX_CSR_MPM_TLB_READS
+    DUMP_CSRS(33);  // VX_CSR_MPM_TLB_HITS
+    DUMP_CSRS(34);  // VX_CSR_MPM_TLB_MISSES
+    DUMP_CSRS(35);  // VX_CSR_MPM_TLB_EVICTS
+    DUMP_CSRS(36);  // VX_CSR_MPM_PTW_WALKS
+    DUMP_CSRS(37);  // VX_CSR_MPM_PTW_LATENCY
+#endif
 }
 
 #ifdef __cplusplus

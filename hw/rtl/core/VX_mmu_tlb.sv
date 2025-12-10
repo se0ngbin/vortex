@@ -38,7 +38,14 @@ module VX_mmu_tlb import VX_gpu_pkg::*; #(
     output wire          fill_ready,
     input  wire [31:0]   fill_vaddr,
     input  wire [31:0]   fill_paddr,
-    input  wire [7:0]    fill_flags
+    input  wire [7:0]    fill_flags,
+
+    // Performance counters output
+`ifdef PERF_ENABLE
+    output mmu_perf_t    mmu_perf
+`else
+    output wire          mmu_perf_placeholder  // Unused placeholder when PERF disabled
+`endif
 );
 
     // =========================================================================
@@ -607,5 +614,57 @@ module VX_mmu_tlb import VX_gpu_pkg::*; #(
 
     // Fill interface from PTW - ready to receive after PTW acknowledged miss
     assign fill_ready = (state == TLB_PTW_WAIT) && miss_sent;
+
+    // =========================================================================
+    // Section 8: TLB Performance Counters
+    // =========================================================================
+`ifdef PERF_ENABLE
+    reg [PERF_CTR_BITS-1:0] perf_tlb_reads;
+    reg [PERF_CTR_BITS-1:0] perf_tlb_hits;
+    reg [PERF_CTR_BITS-1:0] perf_tlb_misses;
+    reg [PERF_CTR_BITS-1:0] perf_tlb_evictions;
+
+    // Track if victim entry was valid before fill (for eviction counting)
+    wire victim_was_valid = tlb_entries[victim_index].valid;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            perf_tlb_reads     <= '0;
+            perf_tlb_hits      <= '0;
+            perf_tlb_misses    <= '0;
+            perf_tlb_evictions <= '0;
+        end else begin
+            // Count TLB reads: when a valid lookup request is accepted in READY state
+            if (state == TLB_READY && input_handshake) begin
+                perf_tlb_reads <= perf_tlb_reads + PERF_CTR_BITS'(1);
+            end
+
+            // Count TLB hits: when lookup completes with a hit in READY state
+            if (state == TLB_READY && input_handshake && tlb_hit) begin
+                perf_tlb_hits <= perf_tlb_hits + PERF_CTR_BITS'(1);
+            end
+
+            // Count TLB misses: when miss triggers PTW (miss handshake)
+            if (miss_valid && miss_ready) begin
+                perf_tlb_misses <= perf_tlb_misses + PERF_CTR_BITS'(1);
+            end
+
+            // Count evictions: when filling an already-valid entry
+            if (fill_valid && fill_ready && victim_was_valid) begin
+                perf_tlb_evictions <= perf_tlb_evictions + PERF_CTR_BITS'(1);
+            end
+        end
+    end
+
+    // Output assignment
+    assign mmu_perf.tlb_reads     = perf_tlb_reads;
+    assign mmu_perf.tlb_hits      = perf_tlb_hits;
+    assign mmu_perf.tlb_misses    = perf_tlb_misses;
+    assign mmu_perf.tlb_evictions = perf_tlb_evictions;
+    assign mmu_perf.ptw_walks     = perf_tlb_misses;  // PTW walks = misses
+    assign mmu_perf.ptw_latency   = '0;  // PTW latency is measured in VX_mmu_ptw, not TLB
+`else
+    assign mmu_perf_placeholder = 1'b0;
+`endif
 
 endmodule

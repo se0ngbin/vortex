@@ -285,11 +285,11 @@ public:
 
   int mpm_query(uint32_t addr, uint32_t core_id, uint64_t *value) {
     uint32_t offset = addr - VX_CSR_MPM_BASE;
-    if (offset > 31)
+    if (offset > 47)  // Extended to support TLB counters at B20-B24
       return -1;
     if (mpm_cache_.count(core_id) == 0) {
-      uint64_t mpm_mem_addr = IO_MPM_ADDR + core_id * 32 * sizeof(uint64_t);
-      CHECK_ERR(this->download(mpm_cache_[core_id].data(), mpm_mem_addr, 32 * sizeof(uint64_t)), {
+      uint64_t mpm_mem_addr = IO_MPM_ADDR + core_id * 48 * sizeof(uint64_t);
+      CHECK_ERR(this->download(mpm_cache_[core_id].data(), mpm_mem_addr, 48 * sizeof(uint64_t)), {
         return err;
       });
     }
@@ -326,7 +326,7 @@ private:
   DeviceConfig        dcrs_;
   std::future<void>   future_;
   bool                pt_reserved_;
-  std::unordered_map<uint32_t, std::array<uint64_t, 32>> mpm_cache_;
+  std::unordered_map<uint32_t, std::array<uint64_t, 48>> mpm_cache_;
 #ifdef VM_ENABLE
   /*
   std::unordered_map<uint64_t, uint64_t> addr_mapping; // HW: key: ppn; value: vpn

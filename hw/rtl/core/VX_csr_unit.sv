@@ -26,6 +26,9 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
 `ifdef PERF_ENABLE
     input sysmem_perf_t         sysmem_perf,
     input pipeline_perf_t       pipeline_perf,
+`ifdef VM_ENABLE
+    input mmu_perf_t            mmu_perf,
+`endif
 `endif
 
 `ifdef EXT_F_ENABLE
@@ -85,6 +88,9 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
     `ifdef PERF_ENABLE
         .sysmem_perf    (sysmem_perf),
         .pipeline_perf  (pipeline_perf),
+    `ifdef VM_ENABLE
+        .mmu_perf       (mmu_perf),
+    `endif
     `endif
 
         .commit_csr_if  (commit_csr_if),

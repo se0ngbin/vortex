@@ -43,6 +43,9 @@ import VX_fpu_pkg::*;
 `ifdef PERF_ENABLE
     input sysmem_perf_t                 sysmem_perf,
     input pipeline_perf_t               pipeline_perf,
+`ifdef VM_ENABLE
+    input mmu_perf_t                    mmu_perf,
+`endif
 `endif
 
     VX_commit_csr_if.slave              commit_csr_if,
@@ -219,8 +222,9 @@ import VX_fpu_pkg::*;
 
             default: begin
                 read_addr_valid_w = 0;
-                if ((read_addr >= `VX_CSR_MPM_USER   && read_addr < (`VX_CSR_MPM_USER + 32))
-                 || (read_addr >= `VX_CSR_MPM_USER_H && read_addr < (`VX_CSR_MPM_USER_H + 32))) begin
+                // Extended range from 32 to 38 to include TLB perf counters (B20-B24, BA0-BA4)
+                if ((read_addr >= `VX_CSR_MPM_USER   && read_addr < (`VX_CSR_MPM_USER + 38))
+                 || (read_addr >= `VX_CSR_MPM_USER_H && read_addr < (`VX_CSR_MPM_USER_H + 38))) begin
                     read_addr_valid_w = 1;
                 `ifdef PERF_ENABLE
                     case (base_dcrs.mpm_class)
@@ -289,6 +293,15 @@ import VX_fpu_pkg::*;
                         `CSR_READ_64(`VX_CSR_MPM_MEM_LT, read_data_ro_w, sysmem_perf.mem.latency);
                         // PERF: coalescer
                         `CSR_READ_64(`VX_CSR_MPM_COALESCER_MISS, read_data_ro_w, sysmem_perf.coalescer.misses);
+                    `ifdef VM_ENABLE
+                        // PERF: TLB
+                        `CSR_READ_64(`VX_CSR_MPM_TLB_READS, read_data_ro_w, mmu_perf.tlb_reads);
+                        `CSR_READ_64(`VX_CSR_MPM_TLB_HITS, read_data_ro_w, mmu_perf.tlb_hits);
+                        `CSR_READ_64(`VX_CSR_MPM_TLB_MISSES, read_data_ro_w, mmu_perf.tlb_misses);
+                        `CSR_READ_64(`VX_CSR_MPM_TLB_EVICTS, read_data_ro_w, mmu_perf.tlb_evictions);
+                        `CSR_READ_64(`VX_CSR_MPM_PTW_WALKS, read_data_ro_w, mmu_perf.ptw_walks);
+                        `CSR_READ_64(`VX_CSR_MPM_PTW_LATENCY, read_data_ro_w, mmu_perf.ptw_latency);
+                    `endif
                         default:;
                         endcase
                     end

@@ -86,6 +86,9 @@ module VX_core import VX_gpu_pkg::*; #(
         sysmem_perf_tmp.lmem = lmem_perf;
         sysmem_perf_tmp.coalescer = coalescer_perf;
     end
+`ifdef VM_ENABLE
+    mmu_perf_t mmu_perf;
+`endif
 `endif
 
     base_dcrs_t base_dcrs;
@@ -179,6 +182,9 @@ module VX_core import VX_gpu_pkg::*; #(
     `ifdef PERF_ENABLE
         .sysmem_perf    (sysmem_perf_tmp),
         .pipeline_perf  (pipeline_perf),
+    `ifdef VM_ENABLE
+        .mmu_perf       (mmu_perf),
+    `endif
     `endif
 
         .base_dcrs      (base_dcrs),
@@ -237,7 +243,12 @@ module VX_core import VX_gpu_pkg::*; #(
         .reset         (reset),
         .satp          (satp_value),
         .lsu_mem_if    (mem_unit_dcache_if),
-        .dcache_mem_if (dcache_bus_if)
+        .dcache_mem_if (dcache_bus_if),
+    `ifdef PERF_ENABLE
+        .mmu_perf      (mmu_perf)
+    `else
+        `UNUSED_PIN (mmu_perf_placeholder)
+    `endif
     );
 `else
     // Direct connection when VM disabled

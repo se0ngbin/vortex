@@ -33,7 +33,14 @@ module VX_mmu import VX_gpu_pkg::*; #(
     VX_mem_bus_if.slave  lsu_mem_if [NUM_REQS],
 
     // Output to dcache (TAG_WIDTH_OUT bits)
-    VX_mem_bus_if.master dcache_mem_if [NUM_REQS]
+    VX_mem_bus_if.master dcache_mem_if [NUM_REQS],
+
+    // Performance counters output
+`ifdef PERF_ENABLE
+    output mmu_perf_t    mmu_perf
+`else
+    output wire          mmu_perf_placeholder  // Unused placeholder when PERF disabled
+`endif
 );
 
     // =========================================================================
@@ -109,6 +116,16 @@ module VX_mmu import VX_gpu_pkg::*; #(
         .TAG_WIDTH   (TAG_WIDTH_TLB),
         .FLAGS_WIDTH (FLAGS_WIDTH)
     ) ptw_mem_if();
+
+    // Performance counter wires
+`ifdef PERF_ENABLE
+    // Note: TLB outputs full mmu_perf_t but doesn't drive ptw_latency field
+    // We override ptw_latency with ptw_latency_counter from PTW
+    /* verilator lint_off UNUSEDSIGNAL */
+    mmu_perf_t mmu_perf_tlb;                          // TLB counters
+    /* verilator lint_on UNUSEDSIGNAL */
+    wire [PERF_CTR_BITS-1:0] ptw_latency_counter;    // PTW latency counter
+`endif
 
     // Combined interfaces for merge arbiter input (9 total: 4 bypass + 4 TLB + 1 PTW)
     // Input mapping: [0..3]=bypass, [4..7]=TLB, [8]=PTW
@@ -263,7 +280,14 @@ module VX_mmu import VX_gpu_pkg::*; #(
         .fill_ready    (tlb_fill_ready),
         .fill_vaddr    (tlb_fill_vaddr),
         .fill_paddr    (tlb_fill_paddr),
-        .fill_flags    (tlb_fill_flags)
+        .fill_flags    (tlb_fill_flags),
+
+        // Performance counters
+    `ifdef PERF_ENABLE
+        .mmu_perf      (mmu_perf_tlb)
+    `else
+        `UNUSED_PIN (mmu_perf_placeholder)
+    `endif
     );
 
     // =========================================================================
@@ -295,7 +319,14 @@ module VX_mmu import VX_gpu_pkg::*; #(
         .fill_flags    (tlb_fill_flags),
 
         // Memory interface for page table walks
-        .ptw_mem_if    (ptw_mem_if)
+        .ptw_mem_if    (ptw_mem_if),
+
+        // Performance counter output
+    `ifdef PERF_ENABLE
+        .perf_ptw_latency (ptw_latency_counter)
+    `else
+        `UNUSED_PIN (perf_ptw_latency_placeholder)
+    `endif
     );
 
     // =========================================================================
@@ -482,5 +513,20 @@ module VX_mmu import VX_gpu_pkg::*; #(
         assign lsu_mem_if[i].rsp_data.tag = rsp_arb_data_out[TAG_WIDTH-1:0];
 
     end
+
+    // =========================================================================
+    // Section 9: Performance Counter Combining
+    // =========================================================================
+    // Combine TLB counters with PTW latency counter
+`ifdef PERF_ENABLE
+    assign mmu_perf.tlb_reads     = mmu_perf_tlb.tlb_reads;
+    assign mmu_perf.tlb_hits      = mmu_perf_tlb.tlb_hits;
+    assign mmu_perf.tlb_misses    = mmu_perf_tlb.tlb_misses;
+    assign mmu_perf.tlb_evictions = mmu_perf_tlb.tlb_evictions;
+    assign mmu_perf.ptw_walks     = mmu_perf_tlb.ptw_walks;
+    assign mmu_perf.ptw_latency   = ptw_latency_counter;  // From PTW
+`else
+    assign mmu_perf_placeholder = 1'b0;
+`endif
 
 endmodule

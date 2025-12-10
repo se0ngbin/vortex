@@ -753,6 +753,17 @@ package VX_gpu_pkg;
         logic [PERF_CTR_BITS-1:0] load_latency;
    } pipeline_perf_t;
 
+`ifdef VM_ENABLE
+    typedef struct packed {
+        logic [PERF_CTR_BITS-1:0] tlb_reads;      // Total TLB lookups
+        logic [PERF_CTR_BITS-1:0] tlb_hits;       // TLB hits
+        logic [PERF_CTR_BITS-1:0] tlb_misses;     // TLB misses (triggered PTW)
+        logic [PERF_CTR_BITS-1:0] tlb_evictions;  // TLB evictions on fill
+        logic [PERF_CTR_BITS-1:0] ptw_walks;      // PTW walks completed
+        logic [PERF_CTR_BITS-1:0] ptw_latency;    // Total cycles spent in PTW
+    } mmu_perf_t;
+`endif
+
     ///////////////////////// LSU memory Parameters ///////////////////////////
 
     localparam LSU_WORD_SIZE        = XLENB;

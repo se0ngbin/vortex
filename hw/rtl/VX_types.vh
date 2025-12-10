@@ -182,6 +182,19 @@
 // PERF: coalescer
 `define VX_CSR_MPM_COALESCER_MISS       12'hB1F     // coalescer misses
 `define VX_CSR_MPM_COALESCER_MISS_H     12'hB9F
+// PERF: TLB (VM_ENABLE only)
+`define VX_CSR_MPM_TLB_READS            12'hB20     // total TLB lookups
+`define VX_CSR_MPM_TLB_READS_H          12'hBA0
+`define VX_CSR_MPM_TLB_HITS             12'hB21     // TLB hits
+`define VX_CSR_MPM_TLB_HITS_H           12'hBA1
+`define VX_CSR_MPM_TLB_MISSES           12'hB22     // TLB misses (triggered PTW)
+`define VX_CSR_MPM_TLB_MISSES_H         12'hBA2
+`define VX_CSR_MPM_TLB_EVICTS           12'hB23     // TLB evictions on fill
+`define VX_CSR_MPM_TLB_EVICTS_H         12'hBA3
+`define VX_CSR_MPM_PTW_WALKS            12'hB24     // PTW walks completed
+`define VX_CSR_MPM_PTW_WALKS_H          12'hBA4
+`define VX_CSR_MPM_PTW_LATENCY          12'hB25     // PTW total latency cycles
+`define VX_CSR_MPM_PTW_LATENCY_H        12'hBA5
 
 // <Add your own counters: use addresses hB03..B1F, hB83..hB9F>
 

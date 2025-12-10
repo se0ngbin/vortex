@@ -37,7 +37,14 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
     output wire [7:0]    fill_flags,
 
     // Memory request interface (for page table walks)
-    VX_mem_bus_if.master ptw_mem_if
+    VX_mem_bus_if.master ptw_mem_if,
+
+    // Performance counter output
+`ifdef PERF_ENABLE
+    output wire [PERF_CTR_BITS-1:0] perf_ptw_latency
+`else
+    output wire perf_ptw_latency_placeholder
+`endif
 );
 
     // =========================================================================
@@ -312,5 +319,30 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
 
     // Always ready to accept responses in RESP states
     assign ptw_mem_if.rsp_ready = (state == PTW_L1_RESP) || (state == PTW_L0_RESP);
+
+    // =========================================================================
+    // Section: PTW Performance Counters
+    // =========================================================================
+`ifdef PERF_ENABLE
+    reg [PERF_CTR_BITS-1:0] perf_ptw_latency_r;
+
+    // PTW is active when NOT in IDLE state
+    wire ptw_active = (state != PTW_IDLE);
+
+    always @(posedge clk) begin
+        if (reset) begin
+            perf_ptw_latency_r <= '0;
+        end else begin
+            // Count every cycle the PTW is active (walking page tables)
+            if (ptw_active) begin
+                perf_ptw_latency_r <= perf_ptw_latency_r + PERF_CTR_BITS'(1);
+            end
+        end
+    end
+
+    assign perf_ptw_latency = perf_ptw_latency_r;
+`else
+    assign perf_ptw_latency_placeholder = 1'b0;
+`endif
 
 endmodule
