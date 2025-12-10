@@ -68,7 +68,6 @@ _start:
   slli  t1, t1, 63
   or    t0, t0, t1
   csrw  satp, t0
-  sfence.vma
 #elif VM_ADDR_MODE == SV32
   li    t0, 0xF0000000              # PAGE_TABLE_BASE_ADDR for SV32 (32-bit)
   srli  t0, t0, 12                  # Convert to PPN (0xF0000)
@@ -76,7 +75,6 @@ _start:
   slli  t1, t1, 31
   or    t0, t0, t1
   csrw  satp, t0
-  sfence.vma
 #endif
 #endif
   # --- End VM Setup ---

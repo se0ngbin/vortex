@@ -178,25 +178,6 @@ public:
     this->tick();
   }
 
-#ifdef VM_ENABLE
-  void set_satp(uint64_t satp) {
-    satp_snapshot_ = satp;
-    
-    // SB-ATTN: Hardware integration - Update these constants when DCRs are defined
-    // You also may want to move this to the runtime or vm file
-    const uint32_t DCR_SATP_LOW  = -1; // REPLACE WITH: VX_DCR_SATP_LOW
-    const uint32_t DCR_SATP_HIGH = -1; // REPLACE WITH: VX_DCR_SATP_HIGH
-    
-    if (DCR_SATP_LOW != (uint32_t)-1) {
-        this->dcr_write(DCR_SATP_LOW, (uint32_t)(satp & 0xffffffff));
-        #if XLEN == 64
-        if (DCR_SATP_HIGH != (uint32_t)-1)
-            this->dcr_write(DCR_SATP_HIGH, (uint32_t)(satp >> 32));
-        #endif
-    }
-  }
-#endif
-
 private:
 
   void reset() {
