@@ -786,8 +786,20 @@ package VX_gpu_pkg;
     // Core request tag Id bits
     localparam ICACHE_TAG_ID_BITS	= NW_WIDTH;
 
-    // Core request tag bits
-    localparam ICACHE_TAG_WIDTH	    = (UUID_WIDTH + ICACHE_TAG_ID_BITS);
+    // Base tag width (internal to core, before MMU expansion)
+    localparam ICACHE_TAG_WIDTH_BASE = (UUID_WIDTH + ICACHE_TAG_ID_BITS);
+
+`ifdef VM_ENABLE
+    // MMU expansion bits for icache (single request port)
+    localparam ICACHE_NUM_REQS        = 1;
+    localparam ICACHE_TLB_SOURCE_BITS = `UP(`CLOG2(ICACHE_NUM_REQS));  // = 1
+    localparam ICACHE_ARB_BITS        = `CLOG2(`CDIV(2 * ICACHE_NUM_REQS + 1, ICACHE_NUM_REQS));  // = 2
+
+    // ICACHE_TAG_WIDTH = external icache interface width (expanded by MMU)
+    localparam ICACHE_TAG_WIDTH       = ICACHE_TAG_WIDTH_BASE + ICACHE_TLB_SOURCE_BITS + ICACHE_ARB_BITS;
+`else
+    localparam ICACHE_TAG_WIDTH       = ICACHE_TAG_WIDTH_BASE;
+`endif
 
     // Memory request data bits
     localparam ICACHE_MEM_DATA_WIDTH = (ICACHE_LINE_SIZE * 8);

@@ -60,8 +60,8 @@ module VX_mmu import VX_gpu_pkg::*; #(
         if (!satp[31]) return 1'b0;
         // IO region - bypass
         if (full_addr < IO_REGION_END) return 1'b0;
-        // Startup region - bypass
-        if (full_addr >= STARTUP_ADDR && full_addr < STARTUP_END) return 1'b0;
+        // Startup region - bypass (inclusive upper bound to match SimX)
+        if (full_addr >= STARTUP_ADDR && full_addr <= STARTUP_END) return 1'b0;
         // Page table region - bypass
         if (full_addr >= PT_BASE_ADDR) return 1'b0;
         // User space - translate

@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # =============================================================================
-# Vortex VM Regression Test Script
+# Vortex VM SimX Regression Test Script
 # =============================================================================
 # Creates a timestamped build directory, configures, builds, and runs all 28
-# regression tests with VM enabled.
+# regression tests with VM enabled using SimX (software simulator).
 #
-# Usage: ./run_vm_regression.sh [--skip-build]
+# Usage: ./run_vm_simx_regression.sh [--skip-build]
 #   --skip-build: Skip configure/build steps (use existing build)
 #
 # Output:
-#   - Build directory: build_YYYYMMDD_HHMMSS/
-#   - Logs: build_YYYYMMDD_HHMMSS/regression_logs/
-#   - Summary: build_YYYYMMDD_HHMMSS/regression_logs/summary.txt
+#   - Build directory: build_simx_YYYYMMDD_HHMMSS/
+#   - Logs: build_simx_YYYYMMDD_HHMMSS/regression_logs/
+#   - Summary: build_simx_YYYYMMDD_HHMMSS/regression_logs/summary.txt
 # =============================================================================
 
 set -e  # Exit on error during build phase
@@ -36,15 +36,14 @@ done
 # Configuration
 # =============================================================================
 
-# Add verilator to PATH
+# Add verilator to PATH (needed for building all runtime drivers during make)
 export PATH=/opt/verilator/bin:$PATH
 
-# Build configuration for VM
-export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE"
-DRIVER="rtlsim"
-PERF_FLAG="--perf=2"
+# Build configuration for VM (SimX doesn't need PERF_ENABLE for basic verification)
+export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1"
+DRIVER="simx"
 
-# 28 regression tests
+# 27 regression tests (sgemm_tcu handled separately)
 TESTS=(
     basic
     bfs
@@ -80,16 +79,16 @@ TESTS=(
 # =============================================================================
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BUILD_DIR="$SCRIPT_DIR/build_$TIMESTAMP"
+BUILD_DIR="$SCRIPT_DIR/build_simx_$TIMESTAMP"
 
 echo "=============================================="
-echo "  Vortex VM Regression Test"
+echo "  Vortex VM SimX Regression Test"
 echo "=============================================="
 echo "  Timestamp:    $TIMESTAMP"
 echo "  Build Dir:    $BUILD_DIR"
 echo "  CONFIGS:      $CONFIGS"
 echo "  Driver:       $DRIVER"
-echo "  Total Tests:  ${#TESTS[@]}"
+echo "  Total Tests:  28 (27 regular + 1 sgemm_tcu)"
 echo "=============================================="
 echo ""
 
@@ -105,7 +104,7 @@ if [ $SKIP_BUILD -eq 0 ]; then
     ../configure --xlen=32 --tooldir=/opt
 
     echo ""
-    echo "[STEP 2/3] Building with VM enabled (this may take a while)..."
+    echo "[STEP 2/3] Building SimX with VM enabled..."
     CONFIGS="$CONFIGS" make -s -j$(nproc)
 
     echo ""
@@ -122,7 +121,7 @@ fi
 
 set +e  # Don't exit on test failure
 
-echo "[STEP 3/3] Running ${#TESTS[@]} regression tests..."
+echo "[STEP 3/3] Running 28 regression tests with SimX..."
 echo ""
 
 # Create log directory
@@ -133,7 +132,6 @@ SUMMARY_FILE="$LOG_DIR/summary.txt"
 # Results tracking
 PASSED=()
 FAILED=()
-TOTAL=${#TESTS[@]}
 
 # Run each test
 for i in "${!TESTS[@]}"; do
@@ -141,13 +139,13 @@ for i in "${!TESTS[@]}"; do
     TEST_NUM=$((i + 1))
     LOG_FILE="$LOG_DIR/${TEST}.log"
 
-    printf "[%2d/%d] Running %-15s ... " "$TEST_NUM" "$TOTAL" "$TEST"
+    printf "[%2d/28] Running %-15s ... " "$TEST_NUM" "$TEST"
 
     # Run the test and capture output
-    CONFIGS="$CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=$TEST $PERF_FLAG > "$LOG_FILE" 2>&1
+    CONFIGS="$CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=$TEST > "$LOG_FILE" 2>&1
     EXIT_CODE=$?
 
-    # Check if FAILED appears in output (more reliable than checking for PASSED)
+    # Check if FAILED appears in output
     if grep -q "FAILED" "$LOG_FILE"; then
         echo "FAILED"
         FAILED+=("$TEST")
@@ -166,9 +164,9 @@ echo "[SPECIAL] Running sgemm_tcu (requires TCU rebuild)..."
 TEST="sgemm_tcu"
 LOG_FILE="$LOG_DIR/${TEST}.log"
 
-# Rebuild RTL with TCU enabled
-echo "  Rebuilding RTL with TCU extension..."
-TCU_CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE -DEXT_TCU_ENABLE"
+# Rebuild with TCU enabled
+echo "  Rebuilding with TCU extension..."
+TCU_CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DEXT_TCU_ENABLE"
 CONFIGS="$TCU_CONFIGS" make -s -j$(nproc) >> "$LOG_FILE" 2>&1
 
 # Build sgemm_tcu test binary
@@ -178,7 +176,7 @@ CONFIGS="-DITYPE=int8 -DOTYPE=int32" make -s -C tests/regression/sgemm_tcu >> "$
 
 # Run sgemm_tcu
 echo "  Running sgemm_tcu..."
-CONFIGS="$TCU_CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=sgemm_tcu $PERF_FLAG >> "$LOG_FILE" 2>&1
+CONFIGS="$TCU_CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=sgemm_tcu >> "$LOG_FILE" 2>&1
 
 # Check result
 printf "[28/28] Running %-15s ... " "$TEST"
@@ -190,7 +188,7 @@ else
     PASSED+=("$TEST")
 fi
 
-TOTAL=28  # Total is still 28 (27 regular + 1 sgemm_tcu)
+TOTAL=28
 
 # =============================================================================
 # Summary Report
@@ -208,7 +206,7 @@ echo ""
 # Write summary to file
 {
     echo "=============================================="
-    echo "  Vortex VM Regression Test Summary"
+    echo "  Vortex VM SimX Regression Test Summary"
     echo "=============================================="
     echo "  Date:      $(date)"
     echo "  Build Dir: $BUILD_DIR"

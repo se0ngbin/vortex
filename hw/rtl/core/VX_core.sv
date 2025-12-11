@@ -76,6 +76,22 @@ module VX_core import VX_gpu_pkg::*; #(
         .TAG_WIDTH (DCACHE_TAG_WIDTH_BASE)
     ) mem_unit_dcache_if [DCACHE_NUM_REQS]();
 
+`ifdef VM_ENABLE
+    // Intermediate interface between VX_fetch and VX_mmu for icache
+    // Uses base tag width (VX_mmu expands to ICACHE_TAG_WIDTH for icache output)
+    // Declared as array[1] because VX_mmu expects array interfaces
+    VX_mem_bus_if #(
+        .DATA_SIZE (ICACHE_WORD_SIZE),
+        .TAG_WIDTH (ICACHE_TAG_WIDTH_BASE)
+    ) fetch_icache_if[1]();
+
+    // Output interface from icache MMU (expanded tag width)
+    VX_mem_bus_if #(
+        .DATA_SIZE (ICACHE_WORD_SIZE),
+        .TAG_WIDTH (ICACHE_TAG_WIDTH)
+    ) icache_mmu_out_if[1]();
+`endif
+
 `ifdef PERF_ENABLE
     lmem_perf_t lmem_perf;
     coalescer_perf_t coalescer_perf;
@@ -88,6 +104,9 @@ module VX_core import VX_gpu_pkg::*; #(
     end
 `ifdef VM_ENABLE
     mmu_perf_t mmu_perf;
+    /* verilator lint_off UNUSEDSIGNAL */
+    mmu_perf_t icache_mmu_perf;  // iTLB perf counters (for future use)
+    /* verilator lint_on UNUSEDSIGNAL */
 `endif
 `endif
 
@@ -137,7 +156,11 @@ module VX_core import VX_gpu_pkg::*; #(
         `SCOPE_IO_BIND  (0)
         .clk            (clk),
         .reset          (reset),
+    `ifdef VM_ENABLE
+        .icache_bus_if  (fetch_icache_if[0]),  // Connect to array element
+    `else
         .icache_bus_if  (icache_bus_if),
+    `endif
         .schedule_if    (schedule_if),
         .fetch_if       (fetch_if)
     );
@@ -255,6 +278,34 @@ module VX_core import VX_gpu_pkg::*; #(
     for (genvar i = 0; i < DCACHE_NUM_REQS; ++i) begin : g_dcache_bypass
         `ASSIGN_VX_MEM_BUS_IF(dcache_bus_if[i], mem_unit_dcache_if[i]);
     end
+`endif
+
+    // =========================================================================
+    // Instruction MMU (iTLB)
+    // =========================================================================
+    // All instruction fetches will bypass (code at STARTUP_ADDR)
+    // but included for architectural consistency
+
+`ifdef VM_ENABLE
+    VX_mmu #(
+        .NUM_REQS  (1),
+        .DATA_SIZE (ICACHE_WORD_SIZE),
+        .TAG_WIDTH (ICACHE_TAG_WIDTH_BASE)
+    ) icache_mmu (
+        .clk           (clk),
+        .reset         (reset),
+        .satp          (satp_value),
+        .lsu_mem_if    (fetch_icache_if),      // Array[1] input
+        .dcache_mem_if (icache_mmu_out_if),    // Array[1] output
+    `ifdef PERF_ENABLE
+        .mmu_perf      (icache_mmu_perf)
+    `else
+        `UNUSED_PIN (mmu_perf_placeholder)
+    `endif
+    );
+
+    // Connect icache MMU output to icache_bus_if port
+    `ASSIGN_VX_MEM_BUS_IF(icache_bus_if, icache_mmu_out_if[0]);
 `endif
 
 `ifdef PERF_ENABLE
