@@ -47,9 +47,9 @@ _start:
   li    t0, 1
   .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
 
-  # clear BSS segment
+  # clear BSS segment (use __BSS_END__ not _end to avoid clearing .pgtable section)
   la    a0, _edata
-  la    a2, _end
+  la    a2, __BSS_END__
   sub   a2, a2, a0
   li    a1, 0
   call  memset
