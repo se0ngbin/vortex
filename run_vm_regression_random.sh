@@ -1,18 +1,23 @@
 #!/bin/bash
 
 # =============================================================================
-# Vortex VM SimX Regression Test Script
+# Vortex VM Regression Test Script with Randomized VA Allocation
 # =============================================================================
 # Creates a timestamped build directory, configures, builds, and runs all 28
-# regression tests with VM enabled using SimX (software simulator).
+# regression tests with VM enabled and RANDOMIZED virtual address mappings.
 #
-# Usage: ./run_vm_simx_regression.sh [--skip-build]
-#   --skip-build: Skip configure/build steps (use existing build)
+# Usage: ./run_vm_regression_random.sh [OPTIONS]
+#   --skip-build:      Skip configure/build steps (use existing build)
+#   --seed=<value>:    Set RNG seed for reproducibility (default: auto-generated)
+#
+# Examples:
+#   ./run_vm_regression_random.sh                    # Random VA with auto-seed
+#   ./run_vm_regression_random.sh --seed=0xBEEFCAFE  # Reproducible random
 #
 # Output:
-#   - Build directory: build_simx_YYYYMMDD_HHMMSS/
-#   - Logs: build_simx_YYYYMMDD_HHMMSS/regression_logs/
-#   - Summary: build_simx_YYYYMMDD_HHMMSS/regression_logs/summary.txt
+#   - Build directory: build_YYYYMMDD_HHMMSS/
+#   - Logs: build_YYYYMMDD_HHMMSS/regression_logs/
+#   - Summary: build_YYYYMMDD_HHMMSS/regression_logs/summary.txt
 # =============================================================================
 
 set -e  # Exit on error during build phase
@@ -23,10 +28,15 @@ cd "$SCRIPT_DIR"
 
 # Parse arguments
 SKIP_BUILD=0
+VA_SEED=""
 for arg in "$@"; do
     case $arg in
         --skip-build)
             SKIP_BUILD=1
+            shift
+            ;;
+        --seed=*)
+            VA_SEED="${arg#*=}"
             shift
             ;;
     esac
@@ -36,14 +46,15 @@ done
 # Configuration
 # =============================================================================
 
-# Add verilator to PATH (needed for building all runtime drivers during make)
+# Add verilator to PATH
 export PATH=/opt/verilator/bin:$PATH
 
-# Build configuration for VM (SimX doesn't need PERF_ENABLE for basic verification)
-export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1"
-DRIVER="simx"
+# Build configuration for VM
+export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE"
+DRIVER="rtlsim"
+PERF_FLAG="--perf=2"
 
-# 27 regression tests (sgemm_tcu handled separately)
+# 28 regression tests
 TESTS=(
     basic
     bfs
@@ -79,17 +90,31 @@ TESTS=(
 # =============================================================================
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BUILD_DIR="$SCRIPT_DIR/build_simx_$TIMESTAMP"
-export VORTEX_RANDOMIZE_VA=0
+BUILD_DIR="$SCRIPT_DIR/build_$TIMESTAMP"
+
+# Always enable randomized VA allocation
+export VORTEX_RANDOMIZE_VA=1
+
+# Set up RNG seed
+if [ -n "$VA_SEED" ]; then
+    export VORTEX_VA_SEED="$VA_SEED"
+    SEED_INFO="$VA_SEED"
+else
+    # Generate random seed if not specified
+    export VORTEX_VA_SEED="0x$(date +%s%N | md5sum | head -c 8)"
+    SEED_INFO="$VORTEX_VA_SEED (auto-generated)"
+fi
 
 echo "=============================================="
-echo "  Vortex VM SimX Regression Test"
+echo "  Vortex VM Regression Test"
 echo "=============================================="
 echo "  Timestamp:    $TIMESTAMP"
 echo "  Build Dir:    $BUILD_DIR"
 echo "  CONFIGS:      $CONFIGS"
 echo "  Driver:       $DRIVER"
-echo "  Total Tests:  28 (27 regular + 1 sgemm_tcu)"
+echo "  VA Mapping:   RANDOMIZED"
+echo "  RNG Seed:     $SEED_INFO"
+echo "  Total Tests:  ${#TESTS[@]}"
 echo "=============================================="
 echo ""
 
@@ -106,20 +131,20 @@ if [ $SKIP_BUILD -eq 0 ]; then
         echo ""
         echo "ERROR: Configuration failed!"
         echo "Please edit the tool paths in this script:"
-        echo "  - Line 40: export PATH=<path-to-verilator>/bin:\$PATH"
-        echo "  - Line 105: ../configure --xlen=32 --tooldir=<path-to-tools>"
+        echo "  - Line 50: export PATH=<path-to-verilator>/bin:\$PATH"
+        echo "  - Line 130: ../configure --xlen=32 --tooldir=<path-to-tools>"
         echo ""
         exit 1
     fi
 
     echo ""
-    echo "[STEP 2/3] Building SimX with VM enabled..."
+    echo "[STEP 2/3] Building with VM enabled (this may take a while)..."
     if ! CONFIGS="$CONFIGS" make -s -j$(nproc); then
         echo ""
         echo "ERROR: Build failed!"
         echo "Please edit the tool paths in this script:"
-        echo "  - Line 40: export PATH=<path-to-verilator>/bin:\$PATH"
-        echo "  - Line 105: ../configure --xlen=32 --tooldir=<path-to-tools>"
+        echo "  - Line 50: export PATH=<path-to-verilator>/bin:\$PATH"
+        echo "  - Line 130: ../configure --xlen=32 --tooldir=<path-to-tools>"
         echo ""
         exit 1
     fi
@@ -141,7 +166,7 @@ else
     cp -r "$PREVIOUS_BUILD_DIR"/ci "$PREVIOUS_BUILD_DIR"/hw "$PREVIOUS_BUILD_DIR"/kernel \
           "$PREVIOUS_BUILD_DIR"/runtime "$PREVIOUS_BUILD_DIR"/sim "$PREVIOUS_BUILD_DIR"/tests \
           "$PREVIOUS_BUILD_DIR"/config.mk "$PREVIOUS_BUILD_DIR"/Makefile ./
-fi 
+fi
 
 # =============================================================================
 # Run Regression Tests
@@ -149,7 +174,7 @@ fi
 
 set +e  # Don't exit on test failure
 
-echo "[STEP 3/3] Running 28 regression tests with SimX..."
+echo "[STEP 3/3] Running ${#TESTS[@]} regression tests..."
 echo ""
 
 # Create log directory
@@ -160,6 +185,9 @@ SUMMARY_FILE="$LOG_DIR/summary.txt"
 # Results tracking
 PASSED=()
 FAILED=()
+TOTAL=${#TESTS[@]}
+
+
 
 # Run each test
 for i in "${!TESTS[@]}"; do
@@ -167,13 +195,13 @@ for i in "${!TESTS[@]}"; do
     TEST_NUM=$((i + 1))
     LOG_FILE="$LOG_DIR/${TEST}.log"
 
-    printf "[%2d/28] Running %-15s ... " "$TEST_NUM" "$TEST"
+    printf "[%2d/%d] Running %-15s ... " "$TEST_NUM" "$TOTAL" "$TEST"
 
     # Run the test and capture output
-    CONFIGS="$CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=$TEST > "$LOG_FILE" 2>&1
+    CONFIGS="$CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=$TEST $PERF_FLAG > "$LOG_FILE" 2>&1
     EXIT_CODE=$?
 
-    # Check if FAILED appears in output
+    # Check if FAILED appears in output (more reliable than checking for PASSED)
     if grep -q "FAILED" "$LOG_FILE"; then
         echo "FAILED"
         FAILED+=("$TEST")
@@ -192,9 +220,9 @@ echo "[SPECIAL] Running sgemm_tcu (requires TCU rebuild)..."
 TEST="sgemm_tcu"
 LOG_FILE="$LOG_DIR/${TEST}.log"
 
-# Rebuild with TCU enabled
-echo "  Rebuilding with TCU extension..."
-TCU_CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DEXT_TCU_ENABLE"
+# Rebuild RTL with TCU enabled
+echo "  Rebuilding RTL with TCU extension..."
+TCU_CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE -DEXT_TCU_ENABLE"
 CONFIGS="$TCU_CONFIGS" make -s -j$(nproc) >> "$LOG_FILE" 2>&1
 
 # Build sgemm_tcu test binary
@@ -204,7 +232,7 @@ CONFIGS="-DITYPE=int8 -DOTYPE=int32" make -s -C tests/regression/sgemm_tcu >> "$
 
 # Run sgemm_tcu
 echo "  Running sgemm_tcu..."
-CONFIGS="$TCU_CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=sgemm_tcu >> "$LOG_FILE" 2>&1
+CONFIGS="$TCU_CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=sgemm_tcu $PERF_FLAG >> "$LOG_FILE" 2>&1
 
 # Check result
 printf "[28/28] Running %-15s ... " "$TEST"
@@ -216,7 +244,7 @@ else
     PASSED+=("$TEST")
 fi
 
-TOTAL=28
+TOTAL=28  # Total is still 28 (27 regular + 1 sgemm_tcu)
 
 # =============================================================================
 # Summary Report
@@ -234,12 +262,14 @@ echo ""
 # Write summary to file
 {
     echo "=============================================="
-    echo "  Vortex VM SimX Regression Test Summary"
+    echo "  Vortex VM Regression Test Summary"
     echo "=============================================="
     echo "  Date:      $(date)"
     echo "  Build Dir: $BUILD_DIR"
     echo "  CONFIGS:   $CONFIGS"
     echo "  Driver:    $DRIVER"
+    echo "  VA Mode:   RANDOMIZED"
+    echo "  RNG Seed:  $VORTEX_VA_SEED"
     echo ""
     echo "=============================================="
     echo "  RESULTS: ${#PASSED[@]}/${TOTAL} PASSED"
@@ -277,6 +307,10 @@ echo ""
 echo "Detailed logs: $LOG_DIR/"
 echo "Summary file:  $SUMMARY_FILE"
 echo ""
+
+# Disable randomized VA allocation for future runs
+unset VORTEX_RANDOMIZE_VA
+unset VORTEX_VA_SEED
 
 # Exit with failure if any test failed
 if [ ${#FAILED[@]} -gt 0 ]; then
