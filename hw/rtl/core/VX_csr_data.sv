@@ -222,7 +222,7 @@ import VX_fpu_pkg::*;
 
             default: begin
                 read_addr_valid_w = 0;
-                // Extended range from 32 to 38 to include TLB perf counters (B20-B24, BA0-BA4)
+                // Range covers 32 base counters + 6 VM counters (B20-B25: TLB hits/misses, PTW latency per MMU)
                 if ((read_addr >= `VX_CSR_MPM_USER   && read_addr < (`VX_CSR_MPM_USER + 38))
                  || (read_addr >= `VX_CSR_MPM_USER_H && read_addr < (`VX_CSR_MPM_USER_H + 38))) begin
                     read_addr_valid_w = 1;

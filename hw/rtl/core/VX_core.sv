@@ -283,8 +283,8 @@ module VX_core import VX_gpu_pkg::*; #(
     // =========================================================================
     // Instruction MMU (iTLB)
     // =========================================================================
-    // All instruction fetches will bypass (code at STARTUP_ADDR)
-    // but included for architectural consistency
+    // Bypass behavior is address-dependent via needs_translation() function.
+    // Code at STARTUP_ADDR and page table regions bypass translation.
 
 `ifdef VM_ENABLE
     VX_mmu #(

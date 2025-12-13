@@ -103,7 +103,7 @@ package VX_gpu_pkg;
 
     localparam MEM_REQ_FLAG_FLUSH =  0;
     localparam MEM_REQ_FLAG_IO =     1;
-    localparam MEM_REQ_FLAG_LOCAL =  2; // shoud be last since optional
+    localparam MEM_REQ_FLAG_LOCAL =  2; // should be last since optional
     localparam MEM_FLAGS_WIDTH = (MEM_REQ_FLAG_LOCAL + `LMEM_ENABLED);
 
     localparam VX_DCR_ADDR_WIDTH = `VX_DCR_ADDR_BITS;
@@ -636,7 +636,6 @@ package VX_gpu_pkg;
         logic                               eop;
     } operands_t;
 
-    // warning: this layout should not be modified without updating VX_dispatch_unit!!!
     typedef struct packed {
         logic [UUID_WIDTH-1:0]              uuid;
         logic [ISSUE_WIS_W-1:0]             wis;
