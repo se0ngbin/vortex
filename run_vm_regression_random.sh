@@ -1,13 +1,18 @@
 #!/bin/bash
 
 # =============================================================================
-# Vortex VM Regression Test Script
+# Vortex VM Regression Test Script with Randomized VA Allocation
 # =============================================================================
 # Creates a timestamped build directory, configures, builds, and runs all 28
-# regression tests with VM enabled.
+# regression tests with VM enabled and RANDOMIZED virtual address mappings.
 #
-# Usage: ./run_vm_regression.sh [--skip-build]
-#   --skip-build: Skip configure/build steps (use existing build)
+# Usage: ./run_vm_regression_random.sh [OPTIONS]
+#   --skip-build:      Skip configure/build steps (use existing build)
+#   --seed=<value>:    Set RNG seed for reproducibility (default: auto-generated)
+#
+# Examples:
+#   ./run_vm_regression_random.sh                    # Random VA with auto-seed
+#   ./run_vm_regression_random.sh --seed=0xBEEFCAFE  # Reproducible random
 #
 # Output:
 #   - Build directory: build_YYYYMMDD_HHMMSS/
@@ -23,10 +28,15 @@ cd "$SCRIPT_DIR"
 
 # Parse arguments
 SKIP_BUILD=0
+VA_SEED=""
 for arg in "$@"; do
     case $arg in
         --skip-build)
             SKIP_BUILD=1
+            shift
+            ;;
+        --seed=*)
+            VA_SEED="${arg#*=}"
             shift
             ;;
     esac
@@ -37,7 +47,7 @@ done
 # =============================================================================
 
 # Add verilator to PATH
-export PATH=$HOME/tools/verilator/bin:$PATH
+export PATH=/opt/verilator/bin:$PATH
 
 # Build configuration for VM
 export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE"
@@ -81,7 +91,19 @@ TESTS=(
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BUILD_DIR="$SCRIPT_DIR/build_$TIMESTAMP"
-export VORTEX_RANDOMIZE_VA=0
+
+# Always enable randomized VA allocation
+export VORTEX_RANDOMIZE_VA=1
+
+# Set up RNG seed
+if [ -n "$VA_SEED" ]; then
+    export VORTEX_VA_SEED="$VA_SEED"
+    SEED_INFO="$VA_SEED"
+else
+    # Generate random seed if not specified
+    export VORTEX_VA_SEED="0x$(date +%s%N | md5sum | head -c 8)"
+    SEED_INFO="$VORTEX_VA_SEED (auto-generated)"
+fi
 
 echo "=============================================="
 echo "  Vortex VM Regression Test"
@@ -90,6 +112,8 @@ echo "  Timestamp:    $TIMESTAMP"
 echo "  Build Dir:    $BUILD_DIR"
 echo "  CONFIGS:      $CONFIGS"
 echo "  Driver:       $DRIVER"
+echo "  VA Mapping:   RANDOMIZED"
+echo "  RNG Seed:     $SEED_INFO"
 echo "  Total Tests:  ${#TESTS[@]}"
 echo "=============================================="
 echo ""
@@ -103,12 +127,12 @@ cd "$BUILD_DIR"
 
 if [ $SKIP_BUILD -eq 0 ]; then
     echo "[STEP 1/3] Configuring..."
-    if ! ../configure --xlen=32 --tooldir=$HOME/tools; then
+    if ! ../configure --xlen=32 --tooldir=/opt; then
         echo ""
         echo "ERROR: Configuration failed!"
         echo "Please edit the tool paths in this script:"
-        echo "  - Line 40: export PATH=<path-to-verilator>/bin:\$PATH"
-        echo "  - Line 106: ../configure --xlen=32 --tooldir=<path-to-tools>"
+        echo "  - Line 50: export PATH=<path-to-verilator>/bin:\$PATH"
+        echo "  - Line 130: ../configure --xlen=32 --tooldir=<path-to-tools>"
         echo ""
         exit 1
     fi
@@ -119,8 +143,8 @@ if [ $SKIP_BUILD -eq 0 ]; then
         echo ""
         echo "ERROR: Build failed!"
         echo "Please edit the tool paths in this script:"
-        echo "  - Line 40: export PATH=<path-to-verilator>/bin:\$PATH"
-        echo "  - Line 106: ../configure --xlen=32 --tooldir=<path-to-tools>"
+        echo "  - Line 50: export PATH=<path-to-verilator>/bin:\$PATH"
+        echo "  - Line 130: ../configure --xlen=32 --tooldir=<path-to-tools>"
         echo ""
         exit 1
     fi
@@ -162,6 +186,8 @@ SUMMARY_FILE="$LOG_DIR/summary.txt"
 PASSED=()
 FAILED=()
 TOTAL=${#TESTS[@]}
+
+
 
 # Run each test
 for i in "${!TESTS[@]}"; do
@@ -242,6 +268,8 @@ echo ""
     echo "  Build Dir: $BUILD_DIR"
     echo "  CONFIGS:   $CONFIGS"
     echo "  Driver:    $DRIVER"
+    echo "  VA Mode:   RANDOMIZED"
+    echo "  RNG Seed:  $VORTEX_VA_SEED"
     echo ""
     echo "=============================================="
     echo "  RESULTS: ${#PASSED[@]}/${TOTAL} PASSED"
@@ -279,6 +307,10 @@ echo ""
 echo "Detailed logs: $LOG_DIR/"
 echo "Summary file:  $SUMMARY_FILE"
 echo ""
+
+# Disable randomized VA allocation for future runs
+unset VORTEX_RANDOMIZE_VA
+unset VORTEX_VA_SEED
 
 # Exit with failure if any test failed
 if [ ${#FAILED[@]} -gt 0 ]; then

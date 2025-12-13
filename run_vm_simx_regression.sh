@@ -80,6 +80,7 @@ TESTS=(
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BUILD_DIR="$SCRIPT_DIR/build_simx_$TIMESTAMP"
+export VORTEX_RANDOMIZE_VA=0
 
 echo "=============================================="
 echo "  Vortex VM SimX Regression Test"
@@ -101,11 +102,27 @@ cd "$BUILD_DIR"
 
 if [ $SKIP_BUILD -eq 0 ]; then
     echo "[STEP 1/3] Configuring..."
-    ../configure --xlen=32 --tooldir=/opt
+    if ! ../configure --xlen=32 --tooldir=/opt; then
+        echo ""
+        echo "ERROR: Configuration failed!"
+        echo "Please edit the tool paths in this script:"
+        echo "  - Line 40: export PATH=<path-to-verilator>/bin:\$PATH"
+        echo "  - Line 105: ../configure --xlen=32 --tooldir=<path-to-tools>"
+        echo ""
+        exit 1
+    fi
 
     echo ""
     echo "[STEP 2/3] Building SimX with VM enabled..."
-    CONFIGS="$CONFIGS" make -s -j$(nproc)
+    if ! CONFIGS="$CONFIGS" make -s -j$(nproc); then
+        echo ""
+        echo "ERROR: Build failed!"
+        echo "Please edit the tool paths in this script:"
+        echo "  - Line 40: export PATH=<path-to-verilator>/bin:\$PATH"
+        echo "  - Line 105: ../configure --xlen=32 --tooldir=<path-to-tools>"
+        echo ""
+        exit 1
+    fi
 
     echo ""
     echo "Build completed successfully!"
@@ -113,7 +130,18 @@ if [ $SKIP_BUILD -eq 0 ]; then
 else
     echo "[SKIP] Skipping configure and build (--skip-build)"
     echo ""
-fi
+    # Find the most recent build directory, excluding the current one
+    PREVIOUS_BUILD_DIR=$(ls -td "$SCRIPT_DIR"/build_* | grep -v "$BUILD_DIR" | head -n 1)
+    if [ -z "$PREVIOUS_BUILD_DIR" ]; then
+        echo "ERROR: No other existing build directory found!"
+        exit 1
+    fi
+    echo "Using the most recent build directory (excluding current): $PREVIOUS_BUILD_DIR"
+    echo "Copying necessary files from the previous build directory to the current directory..."
+    cp -r "$PREVIOUS_BUILD_DIR"/ci "$PREVIOUS_BUILD_DIR"/hw "$PREVIOUS_BUILD_DIR"/kernel \
+          "$PREVIOUS_BUILD_DIR"/runtime "$PREVIOUS_BUILD_DIR"/sim "$PREVIOUS_BUILD_DIR"/tests \
+          "$PREVIOUS_BUILD_DIR"/config.mk "$PREVIOUS_BUILD_DIR"/Makefile ./
+fi 
 
 # =============================================================================
 # Run Regression Tests

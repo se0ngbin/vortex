@@ -6,6 +6,7 @@
 #include <mem.h>
 #include <processor.h>
 #include <unordered_map>
+#include <random>
 #include <util.h>
 
 using namespace vortex;
@@ -41,6 +42,10 @@ class VMManager {
     MemoryAllocator *page_table_mem_;
     MemoryAllocator *virtual_mem_;
     std::unordered_map<uint64_t, uint64_t> addr_mapping;
+    
+    // random number generator for randomized virtual address mapping
+    std::mt19937_64 rng_;
+    bool randomize_va_;
 };
 
 #endif // VM_ENABLE
