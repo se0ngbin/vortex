@@ -37,7 +37,7 @@ done
 # =============================================================================
 
 # Add verilator to PATH
-export PATH=$HOME/tools/verilator/bin:$PATH
+export PATH=/opt/verilator/bin:$PATH
 
 # Build configuration for VM
 export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE"
@@ -103,7 +103,7 @@ cd "$BUILD_DIR"
 
 if [ $SKIP_BUILD -eq 0 ]; then
     echo "[STEP 1/3] Configuring..."
-    if ! ../configure --xlen=32 --tooldir=$HOME/tools; then
+    if ! ../configure --xlen=32 --tooldir=/opt; then
         echo ""
         echo "ERROR: Configuration failed!"
         echo "Please edit the tool paths in this script:"
