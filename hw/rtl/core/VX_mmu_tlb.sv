@@ -2,7 +2,6 @@
 // TLB: CAM-based address translation
 
 `include "VX_define.vh"
-
 /* verilator lint_off WIDTHTRUNC */
 /* verilator lint_off UNUSEDSIGNAL */
 

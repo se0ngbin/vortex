@@ -2,7 +2,6 @@
 // MMU: TLB + PTW for VA→PA translation
 
 `include "VX_define.vh"
-
 /* verilator lint_off WIDTHTRUNC */
 /* verilator lint_off WIDTHEXPAND */
 

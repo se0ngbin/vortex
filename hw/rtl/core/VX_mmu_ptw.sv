@@ -176,4 +176,5 @@ module VX_mmu_ptw import VX_gpu_pkg::*; #(
 `else
     assign perf_ptw_latency_placeholder = 1'b0;
 `endif
+
 endmodule
