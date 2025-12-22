@@ -54,6 +54,10 @@ export CONFIGS="-DVM_ENABLE -DVM_ADDR_MODE=1 -DPERF_ENABLE"
 DRIVER="rtlsim"
 PERF_FLAG="--perf=2"
 
+# Failure detection patterns (regex for grep -E)
+# Catches: explicit failures, Verilator errors, assertions, crashes, make errors
+FAILURE_PATTERNS="FAILED|%Error:|Assertion failed|Aborted|core dumped|make: \*\*\*|Segmentation fault"
+
 # 28 regression tests
 TESTS=(
     basic
@@ -201,9 +205,10 @@ for i in "${!TESTS[@]}"; do
     CONFIGS="$CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=$TEST $PERF_FLAG > "$LOG_FILE" 2>&1
     EXIT_CODE=$?
 
-    # Check if FAILED appears in output (more reliable than checking for PASSED)
-    if grep -q "FAILED" "$LOG_FILE"; then
-        echo "FAILED"
+    # Check for failure: non-zero exit code OR failure patterns in output
+    # This catches crashes, assertions, and explicit failures
+    if [ $EXIT_CODE -ne 0 ] || grep -qE "$FAILURE_PATTERNS" "$LOG_FILE"; then
+        echo "FAILED (exit=$EXIT_CODE)"
         FAILED+=("$TEST")
     else
         echo "PASSED"
@@ -233,11 +238,12 @@ CONFIGS="-DITYPE=int8 -DOTYPE=int32" make -s -C tests/regression/sgemm_tcu >> "$
 # Run sgemm_tcu
 echo "  Running sgemm_tcu..."
 CONFIGS="$TCU_CONFIGS" ./ci/blackbox.sh --driver=$DRIVER --app=sgemm_tcu $PERF_FLAG >> "$LOG_FILE" 2>&1
+EXIT_CODE=$?
 
-# Check result
+# Check result using same logic as main tests
 printf "[28/28] Running %-15s ... " "$TEST"
-if grep -q "FAILED" "$LOG_FILE"; then
-    echo "FAILED"
+if [ $EXIT_CODE -ne 0 ] || grep -qE "$FAILURE_PATTERNS" "$LOG_FILE"; then
+    echo "FAILED (exit=$EXIT_CODE)"
     FAILED+=("$TEST")
 else
     echo "PASSED"
